@@ -1,0 +1,6 @@
+s printf.text
+p printf 0x0000
+# printf (0x0000):
+i 0x2858  # sra     
+i 0x2859  # lra     
+i 0x2280  # ret     
