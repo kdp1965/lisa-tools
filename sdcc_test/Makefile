@@ -12,7 +12,7 @@ SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
-SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop
+SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe
 OUTPUT    = hello test_printf test_owl
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
@@ -23,6 +23,10 @@ all: $(TESTS:%=%.ihx)
 
 %.ihx: %.c harness.h
 	$(SDCC) $(CFLAGS) -o $@ $<
+
+# simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
+test_bigframe.ihx: test_bigframe.c harness.h
+	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 check: all
 	@pass=0; fail=0; \
