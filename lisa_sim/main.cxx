@@ -18,6 +18,11 @@ static void usage(const char* prog) {
     printf("     --port PORT\n");
     printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
     printf("                   without the cache; default 32768); addresses wrap\n");
+    printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
+    printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
+    printf("                   cflag_save and signed_inversion shadowed. Default: the\n");
+    printf("                   TT07 silicon, where an interrupt after an if or the first\n");
+    printf("                   word of an ldx corrupts execution\n");
 }
 
 int main(int argc, char** argv) {
@@ -27,6 +32,7 @@ int main(int argc, char** argv) {
     bool auto_run = false;
     bool batch = false;
     unsigned long ram_bytes = 0;
+    bool fixed_irq = false;
     bool trace = false;
     uint64_t max_cycles = 0;
     int max_steps = 0;
@@ -49,6 +55,8 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             max_steps = atoi(argv[++i]);
             auto_run = true;
+        } else if (strcmp(argv[i], "--fixed-irq") == 0) {
+            fixed_irq = true;
         } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
             ram_bytes = strtoul(argv[++i], nullptr, 0);
             if (ram_bytes < 2 || ram_bytes > 32768 || (ram_bytes & (ram_bytes - 1))) {
@@ -71,6 +79,8 @@ int main(int argc, char** argv) {
 
     if (ram_bytes)
         sim.memory().set_data_size(ram_bytes);
+    if (fixed_irq)
+        sim.core().set_fixed_irq(true);
 
     if (!firmware_file.empty()) {
         if (sim.load_firmware(firmware_file)) {

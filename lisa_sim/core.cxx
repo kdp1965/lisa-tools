@@ -105,19 +105,38 @@ uint8_t LisaCore::pop_byte() {
     return mem_ ? mem_->data_read(sp_ & D_MASK) : 0;
 }
 
-void LisaCore::do_interrupt() {
-    if (!ie_ || !(cond_ & 2)) return;
+void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
+    if (!ie_ || two_stage) return;
+    if (fixed_irq_) {
+        // only between whole instructions: no predication in flight and no
+        // ldx literal pending
+        if (cond_ != 0x03 || ldx_stage_two_) return;
+    } else {
+        // TT07: the cond[1] the instruction found, whatever it left behind
+        if (!(cond_before & 2)) return;
+    }
 
     uint8_t active = int_pending_ & int_en_;
     if (periph_) active |= periph_->get_interrupts();
     if (!active) return;
 
-    // Save state
+    // Save state. As in lisa_core.v: the ISR shadow takes the live C and Z
+    // but the *save* shadow's signed inversion (signed_inv_save, the one
+    // restc would restore); the live signed_inversion is not kept anywhere
+    // and cflag_save is not shadowed at all.  The vector instruction then
+    // runs under the current cond (a skipped vector falls into the next
+    // slot) and, if an ldx literal was pending, is consumed as that literal.
     ia_ = (pc_) & PC_MASK;
     ie_ = false;
+    isr_jump_ = true;
     cflag_isr_ = cflag_;
     zflag_isr_ = zflag_;
-    signed_inv_isr_ = signed_inv_;
+    signed_inv_isr_ = signed_inv_save_;
+    if (fixed_irq_) {
+        signed_inv_live_isr_ = signed_inv_;
+        cflag_save_isr_ = cflag_save_;
+        amode_isr_ = amode_;
+    }
 
     // Priority-encoded vector
     uint16_t vector = 9;
@@ -128,7 +147,8 @@ void LisaCore::do_interrupt() {
         }
     }
     pc_ = vector & PC_MASK;
-    cond_ = 0x03;
+    if (fixed_irq_)
+        cond_ = 0x03;
 }
 
 void LisaCore::set_interrupt(uint8_t mask) { int_pending_ |= mask; }
@@ -195,6 +215,23 @@ void LisaCore::set_state(const LisaCoreState& s) {
 // Execute one instruction. Returns cycle count.
 // =========================================================================
 int LisaCore::step() {
+    // The RTL samples the interrupt in the exec state of every single-stage
+    // instruction (not after sra/lra/push ix/pop ix/ldxx/stxx/div/fops),
+    // with the cond[1] the instruction found - before its own update.
+    uint8_t cond_before = cond_;
+    uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
+    bool skipped = !(cond_ & 1) && !ldx_stage_two_;
+    bool two_stage = !skipped && (
+        (inst & 0xFFF0) == 0xA160 ||                                        // sra / lra / push ix / pop ix
+        ((inst >> 9) & 0x7F) == 0x66 || ((inst >> 9) & 0x7F) == 0x67 ||    // ldxx / stxx
+        (inst & 0xFFF8) == 0xA300);                                         // div / rem
+    int cycles = step_inst();
+    if (!halted_)
+        do_interrupt(cond_before, two_stage);
+    return cycles;
+}
+
+int LisaCore::step_inst() {
     if (halted_) return 1;
 
     // Check breakpoint
@@ -213,6 +250,19 @@ int LisaCore::step() {
         trace_cb_(pc_, inst, get_state());
     }
 
+    // Second pass of ldx: the word is the literal, whatever it is and
+    // whatever cond[0] says (lisa_core.v: exec_state & ldx_stage_two)
+    if (ldx_stage_two_) {
+        ix_ = inst & PC_MASK;
+        ix_cond_ = true;
+        ldx_stage_two_ = false;
+        pc_ = (pc_ + 1) & PC_MASK;
+        cond_ = 0x02 | (cond_ >> 1);
+        inst_count_++;
+        cycle_count_ += cycles;
+        return cycles;
+    }
+
     // Execute only if cond_[0] is true
     bool should_exec = cond_ & 1;
     if (!should_exec)
@@ -221,12 +271,11 @@ int LisaCore::step() {
         inst_count_++;
         cycle_count_ += cycles;
 
-        // Advance PC ... operation skipped
+        // Advance PC ... operation skipped.  A skipped ldx does not skip
+        // its literal: the RTL sets ldx_stage_two only when cond[0] is 1,
+        // so the literal is decoded as an instruction (which is why the
+        // compiler never predicates an ldx).
         pc_ = (pc_ + 1) & PC_MASK;
-        if ((inst >> 4) == 0xA18) {
-            // Skip argument to LDX
-            pc_ = (pc_ + 1) & PC_MASK;
-        }
         return cycles;
     }
 
@@ -247,8 +296,11 @@ int LisaCore::step() {
     // === inst[15]==0: JAL (jump and link) ===
     if ((inst & 0x8000) == 0) {
         uint16_t target = inst & PC_MASK;
-        ra_ = (pc_ + 1) & PC_MASK;
-        ra_cond_ = (cond_ >> 1) & 1;
+        if (!isr_jump_) {   // the vector jal keeps the interrupted RA
+            ra_ = (pc_ + 1) & PC_MASK;
+            ra_cond_ = (cond_ >> 1) & 1;
+        }
+        isr_jump_ = false;
         pc_ = target;
         cond_ = 0x03;
         inst_count_++;
@@ -263,6 +315,7 @@ int LisaCore::step() {
         int16_t offset = sign_extend_11(inst & 0x7FF);
         pc_ = (pc_ + offset) & PC_MASK;
         cond_ = 0x03;
+        isr_jump_ = false;
         inst_count_++;
         cycle_count_ += cycles;
         return cycles;
@@ -274,6 +327,7 @@ int LisaCore::step() {
         if (!zflag_) {
             pc_ = (pc_ + offset) & PC_MASK;
             cond_ = 0x03;
+            isr_jump_ = false;
         } else {
             pc_ = (pc_ + 1) & PC_MASK;
             cond_ = 0x02 | (cond_ >> 1);
@@ -287,6 +341,7 @@ int LisaCore::step() {
         if (zflag_) {
             pc_ = (pc_ + offset) & PC_MASK;
             cond_ = 0x03;
+            isr_jump_ = false;
         } else {
             pc_ = (pc_ + 1) & PC_MASK;
             cond_ = 0x02 | (cond_ >> 1);
@@ -352,8 +407,20 @@ int LisaCore::step() {
         ie_ = true;
         cflag_ = cflag_isr_;
         zflag_ = zflag_isr_;
-        signed_inv_ = signed_inv_isr_;
-        cond_ = 0x03;
+        if (fixed_irq_) {
+            signed_inv_ = signed_inv_live_isr_;
+            signed_inv_save_ = signed_inv_isr_;
+            cflag_save_ = cflag_save_isr_;
+            amode_ = amode_isr_;
+            cond_ = 0x03;
+        } else {
+            // lisa_core.v: the shadow goes back to signed_inv_save; the live
+            // signed_inversion is loaded from signed_inv_val, which is 0
+            // here; rets is not a ret_taken, so cond just shifts
+            signed_inv_save_ = signed_inv_isr_;
+            signed_inv_ = false;
+            cond_ = 0x02 | (cond_ >> 1);
+        }
         inst_count_++;
         cycle_count_ += cycles;
         return cycles;
@@ -363,8 +430,10 @@ int LisaCore::step() {
     uint16_t top11 = (inst >> 5) & 0x7FF;
     if (top11 == 0x454) {  // 10001010100 = CALL IX
         // Per RTL: PC<=IX, RA<=PC+1, ra_cond<=cond[1], then IX<=IX+1 with ix_cond<=cond[1].
-        ra_ = (pc_ + 1) & PC_MASK;
-        ra_cond_ = (cond_ >> 1) & 1;
+        if (!isr_jump_) {
+            ra_ = (pc_ + 1) & PC_MASK;
+            ra_cond_ = (cond_ >> 1) & 1;
+        }
         bool new_ix_cond = (cond_ >> 1) & 1;
         pc_ = ix_ & PC_MASK;
         ix_ = (ix_ + 1) & PC_MASK;
@@ -1174,14 +1243,11 @@ int LisaCore::step() {
         // LDX (load IX from next word): inst[15:4]==101000011000
         // Per RTL: ix_cond becomes 1 after the load.
         if ((inst >> 4) == 0xA18) {
-            if (cond_ & 1) {
-                uint16_t next_inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
-                ix_ = next_inst & PC_MASK;
-                ix_cond_ = true;
-            }
-            pc_ = (pc_ + 1) & PC_MASK;  // Skip the data word
-            cond_ = 0x02 | (cond_ >> 1);
-            cycles = 2;
+            // First pass: arm the second (lisa_core.v: ldx_stage_two <= 1,
+            // cond[0] <= 0, cond[1] kept); the next word loads IX in
+            // step_inst, and an interrupt can get in between on TT07.
+            ldx_stage_two_ = true;
+            cond_ &= 0x02;
             inst_count_++;
             cycle_count_ += cycles;
             return cycles;
@@ -1525,9 +1591,6 @@ int LisaCore::step() {
     cond_ = 0x02 | (cond_ >> 1);
     inst_count_++;
     cycle_count_ += cycles;
-
-    // Check for interrupts after instruction execution
-    do_interrupt();
 
     return cycles;
 }

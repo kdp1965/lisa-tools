@@ -52,6 +52,7 @@ public:
 
     // Execute one full instruction (returns number of cycles taken)
     int step();
+    int step_inst();   // one instruction, no interrupt check
 
     // Get/set state for debugger
     LisaCoreState get_state() const;
@@ -74,6 +75,7 @@ public:
     void set_interrupt(uint8_t mask);
     void clear_interrupt(uint8_t mask);
     void set_int_enable(uint8_t mask) { int_en_ = mask; }
+    void set_fixed_irq(bool on) { fixed_irq_ = on; }
 
     // Trace callback
     using TraceCallback = std::function<void(uint16_t pc, uint16_t inst, const LisaCoreState& state)>;
@@ -97,6 +99,18 @@ private:
     uint8_t  cond_;       // 2-bit
     uint8_t  amode_;      // 3-bit
     bool     ie_;
+    // Interrupt entry/return machinery, as in lisa_core.v (TT07): isr_jump
+    // suppresses the RA write of the first jump after entry; ldx is two
+    // single-stage passes (the second loads IX from whatever word is next).
+    bool     isr_jump_ = false;
+    bool     ldx_stage_two_ = false;
+    // --fixed-irq: the semantics a respin would have (interrupts sampled
+    // only with cond == 3 and no ldx in flight; amode, cflag_save and the
+    // live signed_inversion shadowed too)
+    bool     fixed_irq_ = false;
+    uint8_t  amode_isr_ = 1;
+    bool     cflag_save_isr_ = false;
+    bool     signed_inv_live_isr_ = false;
     bool     halted_;
 
     // ISR saved state
@@ -135,7 +149,7 @@ private:
     int16_t  sign_extend_11(uint16_t val) const;
     int16_t  sign_extend_10(uint16_t val) const;
     int8_t   sign_extend_8(uint8_t val) const;
-    void     do_interrupt();
+    void     do_interrupt(uint8_t cond_before, bool two_stage);
     void     push_byte(uint8_t val);
     uint8_t  pop_byte();
 };
