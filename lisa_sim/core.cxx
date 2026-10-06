@@ -212,6 +212,27 @@ void LisaCore::set_state(const LisaCoreState& s) {
 }
 
 // =========================================================================
+// What a division leaves behind on the TT07 silicon besides A: the whole
+// 16-bit result in RA (ra_cond set), IX zeroed, and the stray low-byte
+// write of the forms whose completing instruction word has bit 1 clear
+// (see the DIV comment in step_inst).
+void LisaCore::div_aftermath(uint8_t dv, uint16_t off, uint16_t divisor, bool is_div) {
+    // RA: the result, 15 bits - except that a quotient by 1 leaves only
+    // its low byte there (observed; the remainder by 1 is 0 anyway)
+    ra_ = div_->result() & 0x7FFF;
+    if (is_div && divisor == 1)
+        ra_ &= 0xFF;
+    ra_cond_ = true;
+    ix_ = 0;
+    ix_cond_ = false;
+    if (!(dv & 1)) {
+        if (!(off & 2))
+            data_write(off & D_MASK, a_, false);
+    } else if (!(dv & 2)) {
+        data_write((sp_ + 0x101) & D_MASK, a_, false);
+    }
+}
+
 // Execute one instruction. Returns cycle count.
 // =========================================================================
 int LisaCore::step() {
@@ -223,6 +244,7 @@ int LisaCore::step() {
     bool skipped = !(cond_ & 1) && !ldx_stage_two_;
     bool two_stage = !skipped && (
         (inst & 0xFFF0) == 0xA160 ||                                        // sra / lra / push ix / pop ix
+        (inst & 0xFFFC) == 0xA170 ||                                        // lddiv
         ((inst >> 9) & 0x7F) == 0x66 || ((inst >> 9) & 0x7F) == 0x67 ||    // ldxx / stxx
         (inst & 0xFFF8) == 0xA300);                                         // div / rem
     int cycles = step_inst();
@@ -1512,8 +1534,21 @@ int LisaCore::step_inst() {
         if (div_) {
             // DIV: inst[15:4]==101000110000.  When the divisor is 16-bit
             // (dv bit0==0), a following word supplies the SP-relative offset of
-            // the divisor high byte (and the result high byte is written back
-            // there, per RTL d_o = div_result[15:8]).
+            // the divisor high byte.
+            //
+            // TT07 silicon (probed on the chip, 2026-10-06): the result's
+            // high byte never reaches memory (the RTL means to store it in
+            // the second stage, but the write never lands); instead, when
+            // the word in the instruction register at completion has bit 1
+            // clear - the offset word of the two-word form, the opcode of
+            // the one-word form - the low byte is written to a stray
+            // address: IX + offset with IX already zeroed (the two-word
+            // form), SP + 0x101 (div 1 / rem 1).  IX comes out 0 (with
+            // ix_cond) from every division, and RA holds the whole 16-bit
+            // result (ra_cond set; only its low byte for a quotient by 1)
+            // - which is how the high byte is read.
+            // Modelled as observed: use offsets 2 / 3 and div 3, never
+            // div 1.
             if ((inst >> 4) == 0xA30) {
                 uint8_t dv = inst & 0x03;
                 uint16_t off = 0;
@@ -1538,9 +1573,7 @@ int LisaCore::step_inst() {
                     div_->start(dividend, divisor, op);
                     a_ = div_->result() & 0xFF;
                     zflag_ = (a_ == 0);
-                    if (!(dv & 1))
-                        data_write((sp_ + off) & D_MASK,
-                                   (div_->result() >> 8) & 0xFF, false);
+                    div_aftermath(dv, off, divisor, true);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 cycles = 2;
@@ -1574,9 +1607,7 @@ int LisaCore::step_inst() {
                     div_->start(dividend, divisor, op);
                     a_ = div_->result() & 0xFF;
                     zflag_ = (a_ == 0);
-                    if (!(dv & 1))
-                        data_write((sp_ + off) & D_MASK,
-                                   (div_->result() >> 8) & 0xFF, false);
+                    div_aftermath(dv, off, divisor, false);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 cycles = 2;

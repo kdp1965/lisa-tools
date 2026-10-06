@@ -150,6 +150,7 @@ private:
     int16_t  sign_extend_10(uint16_t val) const;
     int8_t   sign_extend_8(uint8_t val) const;
     void     do_interrupt(uint8_t cond_before, bool two_stage);
+    void     div_aftermath(uint8_t dv, uint16_t off, uint16_t divisor, bool is_div);
     void     push_byte(uint8_t val);
     uint8_t  pop_byte();
 };
