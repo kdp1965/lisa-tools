@@ -1,9 +1,9 @@
 # SDCC LISA port tests
 
-Test programs for `sdcc -mlisa` (the SDCC port in `~/projects/lisa/sdcc-lisa`,
+Test programs for `sdcc -mlisa` (the SDCC port in `../sdcc-lisa`,
 see its `README-lisa.md` and `src/lisa/PLAN.md`).
 
-    make check          # build and run everything on ../../simulator/lisa_sim
+    make check          # build and run everything on ../lisa_sim/lisa_sim
     make                # just build the .ihx files
     make asm            # generated assembly for inspection
     SDCC=... SIM=... make check     # other compiler / simulator binaries

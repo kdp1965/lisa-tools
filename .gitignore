@@ -15,3 +15,6 @@ lisa_ld/lisa_ld
 lisa_bringup/bringup
 lisa_bringup/bringup.S
 lisa_bringup/bringup.ast
+lisa_sim/lisa_sim
+# the SDCC port is its own git clone (see sdcc-lisa/README-lisa.md)
+sdcc-lisa/

@@ -1,14 +1,14 @@
 # Tests for the SDCC LISA port (sdcc -mlisa).
 #
 #   make            build every test program (.ihx)
-#   make check      build and run them on the C++ simulator
+#   make check      build and run them on the C++ simulator (../lisa_sim)
 #   make asm        keep the generated assembly (*.asm) for inspection
 #
 # Self-checking tests print "ok NNNN" / "FAIL NNNN" per case and end with
 # "ALL PASSED"; output tests are compared with expected/<name>.txt.
 
-SDCC   ?= ../../sdcc-lisa/build/bin/sdcc
-SIM    ?= ../../simulator/lisa_sim
+SDCC   ?= ../sdcc-lisa/build/bin/sdcc
+SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
