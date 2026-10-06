@@ -1407,8 +1407,7 @@ int LisaCore::step_inst() {
             if (top14 == 0x2879) {
                 if (cond_ & 1) {
                     uint8_t idx = inst & 0x03;
-                    bf16_->facc = bf16_->mul(bf16_->facc, bf16_->f[idx]);
-                    zflag_ = (bf16_->facc == 0 || bf16_->facc == 0x8000);
+                    bf16_->facc = BF16Unit::fmul_rtl(bf16_->facc, bf16_->f[idx]);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
@@ -1420,8 +1419,7 @@ int LisaCore::step_inst() {
             if (top14 == 0x287A) {
                 if (cond_ & 1) {
                     uint8_t idx = inst & 0x03;
-                    bf16_->facc = bf16_->add(bf16_->facc, bf16_->f[idx]);
-                    zflag_ = (bf16_->facc == 0 || bf16_->facc == 0x8000);
+                    bf16_->facc = BF16Unit::fadd_rtl(bf16_->facc, bf16_->f[idx], (amode_ & 0x04) != 0);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
@@ -1462,9 +1460,10 @@ int LisaCore::step_inst() {
             if (top14 == 0x287D) {
                 if (cond_ & 1) {
                     uint8_t idx = inst & 0x03;
-                    int r = bf16_->cmp(bf16_->facc, bf16_->f[idx]);
-                    zflag_ = (r == 0);
-                    cflag_ = (r > 0);
+                    bool z, c;
+                    BF16Unit::fcmp_rtl(bf16_->facc, bf16_->f[idx], z, c);
+                    zflag_ = z;
+                    cflag_ = c;
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
@@ -1476,8 +1475,8 @@ int LisaCore::step_inst() {
             if (top14 == 0x287E) {
                 if (cond_ & 1) {
                     uint8_t idx = inst & 0x03;
-                    bf16_->facc = bf16_->div(bf16_->facc, bf16_->f[idx]);
-                    zflag_ = (bf16_->facc == 0 || bf16_->facc == 0x8000);
+                    bf16_->facc = BF16Unit::fdiv_rtl(bf16_->facc, bf16_->f[idx], (amode_ & 0x04) != 0);
+                    cflag_ = true;   // fdiv_valid
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 cycles = 2;
@@ -1490,12 +1489,8 @@ int LisaCore::step_inst() {
             // Per RTL: source is the 16-bit facc (signed when amode[1]==1), and the
             // bf16 result is written back to facc.
             if (inst == 0xA320) {
-                if (cond_ & 1) {
-                    float f = (amode_ & 0x02)
-                                  ? (float)(int16_t)bf16_->facc
-                                  : (float)bf16_->facc;
-                    bf16_->facc = BF16Unit::from_float(f);
-                }
+                if (cond_ & 1)
+                    bf16_->facc = BF16Unit::itobf16(bf16_->facc, (amode_ & 0x02) != 0);
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
                 cycle_count_ += cycles;
@@ -1505,13 +1500,8 @@ int LisaCore::step_inst() {
             // FTOI: inst==1010001100100001
             // Per RTL: facc <= int16(bf16 facc). Signed truncation when amode[1]==1.
             if (inst == 0xA321) {
-                if (cond_ & 1) {
-                    float f = BF16Unit::to_float(bf16_->facc);
-                    if (amode_ & 0x02)
-                        bf16_->facc = (uint16_t)(int16_t)f;
-                    else
-                        bf16_->facc = (uint16_t)f;
-                }
+                if (cond_ & 1)
+                    bf16_->facc = BF16Unit::bf16toi(bf16_->facc, (amode_ & 0x02) != 0);
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
                 cycle_count_ += cycles;
