@@ -35,6 +35,27 @@ static void set31(unsigned long *l) { *l = 31; }
 static volatile unsigned char __at(0x40) scratch;
 #define ABS(a) (*(volatile unsigned char *)(a))
 
+/* 7. the A register allocator: an 8-bit division helper returns int into
+      a one-byte result in A (only its low byte may be read), and a byte in
+      A that an earlier compare tested needs its own zero test before the
+      branch (Z was the compare's) */
+static unsigned char divq(unsigned char a, unsigned char b) { return b / a; }
+static unsigned char words(char *s)
+{
+  unsigned char n = 0;
+  while (1)
+    {
+      while (*s == ' ')
+        s++;
+      if (*s == 0)
+        break;
+      n++;
+      while (*s != ' ' && *s != 0)
+        s++;
+    }
+  return n;
+}
+
 int main(void)
 {
   sl = 5; sr = 26; sres = sl - sr;
@@ -88,6 +109,13 @@ int main(void)
     else
       n += 10;
     CHECK(19, n == 11);
+  }
+
+  CHECK(20, divq(1, 2) == 2 && divq(7, 77) == 11);
+  {
+    char buf[12];
+    strcpy(buf, " a bb  ccc ");
+    CHECK(21, words(buf) == 3 && words("") == 0);
   }
 
   DONE();
