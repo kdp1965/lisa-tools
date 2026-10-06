@@ -1,5 +1,5 @@
 #
-# Module:  Makefile for lisa_asm/lib
+# Module:  Makefile for lisa_asm
 #
 # Copyright 2024 by Ken Pettit <pettitkd@gmail.com>
 #
@@ -25,30 +25,48 @@
 # SUCH DAMAGE.
 # ------------------------------------------------------------------------------
 
-AS = ../lisa_as
-AR = ../../lisa_ar/lisa_ar
-ASFLAGS = -w16 -7
+TARGET   = lisa_ar
 
-LIBFILE = libc.a
+CFLAGS   = -g
+LDFLAGS  = -g
+CC       = $(CROSS_COMPILE)g++
+LIBS     = -lstdc++
 
-AREL = $(patsubst src/%.S, out/%.rel, $(wildcard */*.S))
+DEPDIR   = .dep
+OBJDIR   = obj
 
-$(info $(ASRCS))
+# Compile all CPP files in the project
+SRC      = $(wildcard *.cpp)
+OTMP     = $(SRC:.cpp=.o)
+OBJFILES = $(patsubst %,$(OBJDIR)/%,$(OTMP))
+DEPS     = $(patsubst %.o,$(DEPDIR)/%.d,$(OTMP))
 
-all: init $(AREL)
-	@cp out/crt0.rel .
-	@cp out/crt0_noint.rel .
+#==============================================================================
+# Main target is $(TARGET)
+#==============================================================================
+all: init $(TARGET)
 
-init:
-	@mkdir -p out
+#Include our built dependencies
+-include $(DEPS)
+ 
+# Make our dependencies from the source
+%.d: %.cpp
+	$(SHELL) -ec '$(CC) -M $(SRC) $< | sed '\"s/$*.o/& $@/g'\" > .dep/$@'
 
-out/%.rel: src/%.S
-	@echo "Assembling " $<
-	@$(AS) $(ASFLAGS) -o $@ $<
-	@$(AR) -rcs $(LIBFILE) $@
+# The rule to make our target
+$(TARGET):  $(OBJFILES)
+	$(CC) $(LDFLAGS) $(LIBS) $(OBJFILES) -o $(TARGET)
+
+# The rule to compile our sources and build dependencies
+$(OBJDIR)/%.o: %.cpp
+	$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) -MM -MT $(OBJDIR)/$*.o $(CFLAGS) $*.cpp > $(DEPDIR)/$*.d
+
+init:	
+	@mkdir -p $(DEPDIR)
+	@mkdir -p $(OBJDIR)
 
 clean:
-	@rm -rf out
-	@rm -rf $(LIBFILE)
+	@rm -rf $(OBJDIR) $(DEPDIR)
+	@rm -f $(TARGET)
 
-# vim: noet

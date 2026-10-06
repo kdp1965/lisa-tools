@@ -21,6 +21,8 @@ static Buffer *cppdefs;
 static Vector *tmpfiles = &EMPTY_VECTOR;
 char        *gpToolPath;
 char        gOptimizationLevel = '1';
+int         gAstDebug = 0;     // Global to control AST debug output
+int         gAstMaxLines = 0;  // Maximum number of AST debug lines (0 = unlimited)
 
 static void usage(int exitcode) {
     fprintf(exitcode ? stderr : stdout,
@@ -45,6 +47,8 @@ static void usage(int exitcode) {
             "  -m64              Output 64-bit code (default)\n"
             "  -w                Disable all warnings\n"
             "  -h                print this help\n"
+            "  -a                Output AST debug comments in assembly\n"
+            "  -n <number>       Maximum number of AST debug lines (0 = unlimited)\n"
             "\n"
             "One of -a, -c, -E or -S must be specified.\n\n");
     exit(exitcode);
@@ -115,7 +119,7 @@ static void parse_m_arg(char *s) {
 static void parseopt(int argc, char **argv) {
     cppdefs = make_buffer();
     for (;;) {
-        int opt = getopt(argc, argv, "I:ED:O:SU:W:cd:f:gm:o:phw");
+        int opt = getopt(argc, argv, "aI:ED:O:SU:W:cd:f:gm:n:o:phw");
         if (opt == -1)
             break;
         switch (opt) {
@@ -138,13 +142,18 @@ static void parseopt(int argc, char **argv) {
         case 'f': parse_f_arg(optarg); break;
         case 'm': parse_m_arg(optarg); break;
         case 'g': break;
+        case 'n':
+            gAstMaxLines = atoi(optarg);
+            if (gAstMaxLines < 0) {
+                error("Invalid value for -n option: %s", optarg);
+            }
+            break;
         case 'o': outfile = optarg; break;
         case 'w': enable_warning = false; break;
         case 'p': pcode = true; break;
-        case 'h':
-            usage(0);
-        default:
-            usage(1);
+        case 'h': usage(0); break;
+        case 'a': gAstDebug = 1; break;
+        default: usage(1);
         }
     }
     if (optind != argc - 1)
@@ -231,6 +240,7 @@ int main(int argc, char **argv) {
             emit_toplevel(v);
     }
 
+    write_all_frames();
     close_output_file();
 
     if (!dumpast && !dumpasm) {

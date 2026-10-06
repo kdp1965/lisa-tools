@@ -22,6 +22,10 @@
 #ifndef PARSER_H
 #define PARSER_H
 
+#include <unistd.h>
+#include <limits.h>
+#include <cstdio>
+
 #include "parsectx.h"
 
 #define STATE_IDLE                          0
@@ -118,6 +122,9 @@ class CParser
                                 std::string& sFilename, uint32_t lineNo);
 
         void                Trim(std::string &str);
+
+        /// Get the file path of an opened file
+        int                 GetFilePath(FILE *fp, std::string &filePath);
 
         /// Array of keyword handler function pointers
         static  CParserFuncPtr  m_pKeywords[22];

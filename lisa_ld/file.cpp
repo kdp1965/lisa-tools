@@ -38,7 +38,10 @@ Constructor
 CFile::CFile(CParseCtx* pSpec)
 {
     m_pSpec = pSpec;
+    m_pLinker = NULL;
     m_ActiveSection = NULL;
+    m_Offset = 0;
+    m_Lines = 0;
 }
 
 /* 
@@ -96,6 +99,7 @@ int CFile::ParseSection(CParserFile *pFile)
     pSection->m_Name = m_Args[1];
     m_ActiveSection = pSection;
     m_FileSections.insert(std::pair<std::string, CFileSection *>(m_Args[1], pSection));
+    m_SectionOrder.push_back(m_Args[1]);
     return ERROR_NONE;
 }
 
@@ -384,6 +388,26 @@ int CFile::ParseUninitializedAlloc(CParserFile *pFile)
 
 /* 
 =============================================================================
+Parse the source file
+=============================================================================
+*/
+int CFile::ParseSourceFile(CParserFile *pFile)
+{
+    // Validate a size was provided
+    if (m_Argc < 2)
+    {
+        printf("%s: Line %d: Expected source file name after 'f'\n",
+                pFile->m_Filename.c_str(), pFile->m_Line);
+        return ERROR_INVALID_SYNTAX;
+    }
+
+    m_SourceFile = m_Args[1];
+
+    return ERROR_NONE;
+}
+
+/* 
+=============================================================================
 Parse next line from the file
 =============================================================================
 */
@@ -449,6 +473,10 @@ int CFile::ParseLine(const char *pLine, CParserFile *pFile)
             ret = ParseUninitializedAlloc(pFile);
             break;
 
+        case 'f':
+            ret = ParseSourceFile(pFile);
+            break;
+
         default:
             printf("%s: Line %d: Unknown relocation request %c\n",
                     pFile->m_Filename.c_str(), pFile->m_Line, *sMutable);
@@ -486,6 +514,20 @@ int CFile::LoadRelFile(const char *pFilename)
     file.m_Filename = pFilename;
     file.m_Line = 0;
 
+    // Test if this is a file slice
+    if (m_Offset != 0)
+    {
+        // Seek to the locaiton
+        fseek(fd, m_Offset, SEEK_SET);
+
+        fgets(sLine, sizeof sLine, fd);
+        char *sMember = strtok(sLine, "#:, \r\n"); 
+        sMember = strtok(NULL, "#:, \r\n");
+        char *sLines = strtok(NULL, "#:, \r\n"); 
+        if (sLines != NULL)
+            m_Lines = atoi(sLines);
+    }
+
     // Read all lines from the input file and parse each
     parseFailed = false;
     lastErr = ERROR_NONE;
@@ -493,6 +535,10 @@ int CFile::LoadRelFile(const char *pFilename)
     {
         // Increment the line number for this file
         file.m_Line++;
+
+        // Test for end of file slice
+        if (m_Lines && file.m_Line > m_Lines)
+            break;
 
         // Remove trailing \n if it exists
         int len = strlen(sLine);

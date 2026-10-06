@@ -209,6 +209,9 @@ typedef struct Node {
     int kind;
     Type *ty;
     SourceLoc *sourceLoc;
+    int virtRegOffset;
+    int hasVirtReg;
+    int argsSwapped;
     union {
         // Char, int, or long
         long ival;
@@ -393,6 +396,7 @@ void stream_unstash(void);
 void set_output_file(FILE *fp);
 void close_output_file(void);
 void emit_toplevel(Node *v);
+void write_all_frames(void);
 
 // lex.c
 void lex_init(char *filename);
@@ -426,6 +430,11 @@ Node *read_expr(void);
 Vector *read_toplevels(void);
 void parse_init(void);
 char *fullpath(char *path);
+Node* make_ast(Node *pTempl);
+Node *ast_lvar(Type *ty, char *name);
+Node *ast_decl(Node *var, Vector *init);
+Node *ast_compound_stmt(Vector *stmts);
+Type *copy_type(Type *ty);
 
 // set.c
 Set *set_add(Set *s, char *v);
@@ -438,6 +447,7 @@ Vector *make_vector(void);
 Vector *make_vector1(void *e);
 Vector *vec_copy(Vector *src);
 void vec_push(Vector *vec, void *elem);
+void vec_push_head(Vector *vec, void *elem);
 void vec_append(Vector *a, Vector *b);
 void *vec_pop(Vector *vec);
 void *vec_get(Vector *vec, int index);

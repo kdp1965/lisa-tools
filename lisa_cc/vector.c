@@ -65,6 +65,13 @@ void vec_push(Vector *vec, void *elem) {
     vec->body[vec->len++] = elem;
 }
 
+void vec_push_head(Vector *vec, void *elem) {
+    extend(vec, 1);
+    memmove(vec->body+1, vec->body, sizeof(void*) * (vec->len));
+    vec->body[0] = elem;
+    vec->len++;
+}
+
 void vec_append(Vector *a, Vector *b) {
     extend(a, b->len);
     memcpy(a->body + a->len, b->body, sizeof(void *) * b->len);

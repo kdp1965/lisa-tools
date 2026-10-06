@@ -59,6 +59,7 @@ int main(int argc, char* argv[])
     bool            binaryOutput = false;
     bool            mixed = false;
     int             width = 14;
+    bool            tt07 = false;
     int             c;
 
     // Test if resource script provided
@@ -69,10 +70,14 @@ int main(int argc, char* argv[])
     }
 
     // Parse options
-    while ((c = getopt(argc, argv, "D:g:hI:mo:w:")) != -1)
+    while ((c = getopt(argc, argv, "7D:g:hI:mo:w:")) != -1)
     {
         switch (c)
         {
+        case '7':
+            assembler.m_ChipTT07 = true;
+            break;
+
         case 'g':
             debugLevel = atoi(optarg);
             break;
@@ -135,7 +140,6 @@ int main(int argc, char* argv[])
        parser.m_DebugLevel = debugLevel;
        if ((err = parser.ParseFile(argv[c], &spec)) != ERROR_NONE)
            exit(err);
-
     }
 
     // Build the image

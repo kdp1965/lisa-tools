@@ -12,11 +12,17 @@
 #include <unistd.h>
 #include "lisacc.h"
 
+#define MAX_LVARS       32
+#define MAX_PARAMS      32
+
 bool dumpstack = false;
 bool dumpsource = true;
 
 char *localFuncs[1024];
 int nLocalFuncs = 0;
+
+extern int gAstDebug;    // Global to control AST debug output
+extern int gAstMaxLines; // Maximum number of AST debug lines to output
 
 typedef struct lvar_s
 {
@@ -61,6 +67,7 @@ typedef struct opt_s
 
 typedef struct stack_frame_s
 {
+    struct stack_frame_s * pNext;
     Node       *func;
     char       *fname;
     asm_line_t *pAdsLine;
@@ -72,10 +79,11 @@ typedef struct stack_frame_s
     int         localArea;
     int         stackPos;
     int         stackOps;
+    int         stackUtil;
     int         nlvars;
-    lvar_t      lvars[32];
+    lvar_t      lvars[MAX_LVARS];
     int         nparam;
-    lvar_t      param[32];
+    lvar_t      param[MAX_PARAMS];
     char        accVar[256];
     int         accVal;
     int         accOnStack;
@@ -91,10 +99,14 @@ typedef struct stack_frame_s
     int         isTernary;
     int         emitCompZero;
     int         noBitShiftStruc;
+    int         virtRegsUsed;
+    int         virtRegDepth;
+    int         virtRegMaxDepth;
     asm_line_t *pLastRetLine;
     asm_line_t *pLastSwapLine;
     label_ref_t *pLabelRefs;
     opts_t      opts;
+    char        linePrinted[1024*256];
 } stack_frame_t;
 
 static int TAB = 8;
@@ -111,8 +123,17 @@ static const char *gpCurrSegment = "";
 static int gLastEmitWasRet = 0;
 static int gLastEmitWasJal = 0;
 static stack_frame_t *pFrame = NULL;
+static stack_frame_t *gpFirstFrame = NULL;
 static int gEmitToDataSection = 0;
 extern char gOptimizationLevel;
+
+static int gNexternLabels;
+static char *gExternLabels[1024];
+static asm_line_t *gpExternsLine = NULL;
+
+static asm_line_t *gpRoLines = NULL;
+static asm_line_t *gpLastRoLine = NULL;
+static char gLastRoSection[256] = {0,};
 
 static void emit_addr(Node *node);
 static int emit_expr(Node *node);
@@ -120,6 +141,7 @@ static void emit_decl_init(Vector *inits, int off, int totalsize);
 static void do_emit_data(Vector *inits, int size, int off, int depth);
 static void emit_data(Node *v, int off, int depth);
 void do_node2s(Buffer *b, Node *node, int indent);
+static void emit_ast_as_comments(Node *node, int maxLines);
 
 #define REGAREA_SIZE 176
 
@@ -254,12 +276,28 @@ void insert_asm_line_before(asm_line_t *pLine, asm_line_t *pBefore)
     // Insert pLine into the linked list
     pLine->pNext = pBefore;
     pLine->pPrev = pBefore->pPrev;
-    pBefore->pPrev->pNext = pLine;
+    if (pBefore->pPrev)
+        pBefore->pPrev->pNext = pLine;
     pBefore->pPrev = pLine;
 
     // Test if pBefore was the first item
     if (pBefore == pFrame->pAsmLines)
         pFrame->pAsmLines = pLine;
+}
+
+/*
+==========================================================================================
+Insert an asm_line_t after the specified pBefore asm_line
+==========================================================================================
+*/
+void insert_asm_line_after(asm_line_t *pLine, asm_line_t *pAfter)
+{
+    // Insert pLine into the linked list
+    pLine->pNext = pAfter->pNext;
+    pLine->pPrev = pAfter;
+    if (pAfter->pNext)
+        pAfter->pNext->pPrev = pLine;
+    pAfter->pNext = pLine;
 }
 
 /*
@@ -675,6 +713,46 @@ static void emit_nostack(char *fmt, ...) {
 
 /*
 ==========================================================================================
+Output AST node as assembly comments, limiting to maxLines if non-zero
+==========================================================================================
+*/
+static void emit_ast_as_comments(Node *node, int maxLines)
+{
+    if (!node)
+        return;
+
+    // Create buffer and get AST string representation
+    Buffer *b = make_buffer();
+    do_node2s(b, node, 0);
+    char *ast_str = buf_body(b);
+    
+    // Split string on newlines and emit each line as a comment
+    char *line = ast_str;
+    char *next;
+    int lineCount = 0;
+    while (line && *line && (maxLines == 0 || lineCount < maxLines)) {
+        // Find next newline
+        next = strchr(line, '\n');
+        if (next) {
+            *next = '\0';  // Temporarily terminate the current line
+            emit("// %s", line);
+            *next = '\n';  // Restore the newline
+            line = next + 1;
+        } else {
+            // Last line
+            if (*line)  // Only emit if non-empty
+                emit("// %s", line);
+            break;
+        }
+        lineCount++;
+        if (maxLines > 0 && lineCount == maxLines && line && *line) {
+            emit("// ...");  // Indicate there's more that was truncated
+        }
+    }
+}
+
+/*
+==========================================================================================
 Test if the given name is an LVAR and return it's offset or -1 if not LVAR.
 ==========================================================================================
 */
@@ -726,12 +804,13 @@ static void mark_stack_operations(int depth)
   asm_line_t  *pLine;
   int           diff;
 
-  if (pFrame->stackOps >= depth)
+  if (pFrame->stackUtil >= depth + pFrame->virtRegMaxDepth)
     return;
 
   // Mark stack as using stack ops
-  diff = depth - pFrame->stackOps;
+  diff = (depth + pFrame->virtRegMaxDepth) - pFrame->stackUtil;
   pFrame->stackOps = depth;
+  pFrame->stackUtil = depth + pFrame->virtRegMaxDepth;
   
   // Add 2 to stackPos to account for 16-bit op
   pFrame->localArea += diff;
@@ -860,6 +939,94 @@ static void pop(char *reg) {
       emit("pop       %s", reg);
       pFrame->stackPos -= 8;
     }
+}
+
+/*
+==========================================================================================
+Returns TRUE (1) if the given node is "simple", meaning it can be implemented with a
+single opcode given the parent node's operation
+==========================================================================================
+*/
+static int is_simple_node(Node *node, Node *child)
+{
+    // Test for LVAR access
+    if (child->kind == AST_LVAR || child->kind == AST_GVAR ||
+            child->kind == AST_LITERAL)
+    {
+        switch (node->kind) {
+            case '<':
+            case '>':
+            case OP_EQ:
+            case OP_LE:
+            case OP_NE:
+            case OP_GE:
+            case '+':
+            case '^':
+            case '|':
+            case '=':
+            case '&':
+                return 1;
+
+        }
+    }
+    return 0;
+}
+
+/*
+==========================================================================================
+Allocates a virtual register by size
+==========================================================================================
+*/
+static int alloc_virtual_reg_by_size(int size)
+{
+    int virtRegOffset = pFrame->virtRegDepth;
+    pFrame->virtRegDepth += size;
+    if (pFrame->virtRegDepth > pFrame->virtRegMaxDepth)
+        pFrame->virtRegMaxDepth = pFrame->virtRegDepth;
+
+    return virtRegOffset;
+}
+
+/*
+==========================================================================================
+Allocates a virtual register for the node
+==========================================================================================
+*/
+static void alloc_virtual_reg(Node *node)
+{
+    node->virtRegOffset = pFrame->virtRegDepth;
+    node->hasVirtReg = 1;
+    pFrame->virtRegDepth += node->ty->size;
+    if (pFrame->virtRegDepth > pFrame->virtRegMaxDepth)
+        pFrame->virtRegMaxDepth = pFrame->virtRegDepth;
+}
+
+/*
+==========================================================================================
+Maybe allocate a virtual register to store 'left' node results for complex expressions.
+==========================================================================================
+*/
+static int maybe_alloc_virtual_reg(Node *node)
+{
+    // Check if this is a binary expression with both operands present
+    if (node->left && node->right)
+    {
+        // Determine if both left and right are non-trivial.
+        // You can define a helper, e.g., is_simple_node(), that returns true
+        // if the node is a simple LVAR, GVAR, or LITERAL.
+        if (!is_simple_node(node, node->left) && !is_simple_node(node, node->right))
+        {
+            // Allocate the next available virtual register offset.
+            alloc_virtual_reg(node);
+            emit("// Virtual Reg Allocated: %d(sp), size %d", pFrame->stackOps + node->virtRegOffset,node->ty->size);
+
+            // Mark the flag in the current stack frame.
+            pFrame->virtRegsUsed = 1;
+            mark_stack_operations(pFrame->stackOps);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /*
@@ -1032,19 +1199,76 @@ static void emit_extern(char *pStr) {
     asm_line_t  *pLine;
     char        str[256];
 
-    for (x = 0; x < pFrame->nexternLabels; x++)
+    for (x = 0; x < gNexternLabels; x++)
     {
-        if (strcmp(pFrame->externLabels[x], pStr) == 0)
+        if (strcmp(gExternLabels[x], pStr) == 0)
             return;
     }
 
     // Add the extern label
-    pFrame->externLabels[pFrame->nexternLabels++] = strdup(pStr);
+    gExternLabels[gNexternLabels++] = strdup(pStr);
 
     sprintf(str, "    .extern %s", pStr);
     pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
     pLine->pLine = strdup(str);
-    insert_asm_line_before(pLine, pFrame->pAsmLines->pNext);
+    insert_asm_line_after(pLine, gpExternsLine);
+    gpExternsLine = gpExternsLine->pNext;
+}
+
+/*
+==========================================================================================
+Add a section.ro data line
+==========================================================================================
+*/
+static void add_rodata_line(asm_line_t *pLine)
+{
+    char        str[256];
+    char        section[240];
+
+    // Generate section name
+    snprintf(section, sizeof(section), "%s.rodata", pFrame->fname);
+
+    // Test if current section matches our section
+    if (strcmp(section, gLastRoSection) != 0)
+    {
+        // Add a new section name
+        snprintf(str, sizeof(str), "\n    .section %s", section);
+
+        // Make this the last RO section
+        strncpy(gLastRoSection, section, sizeof(gLastRoSection));
+
+        // Add to gpRoLines
+        asm_line_t *pLine2 = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine2->pLine = strdup(str);
+
+        add_rodata_line(pLine2);
+
+        // Create a public label for the section so it shows up in the map
+        snprintf(str, sizeof(str), "    .public %s", section);
+        pLine2 = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine2->pLine = strdup(str);
+        add_rodata_line(pLine2);
+
+        // Create a public label for the section so it shows up in the map
+        snprintf(str, sizeof(str), "%s:", section);
+        pLine2 = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine2->pLine = strdup(str);
+        add_rodata_line(pLine2);
+    }
+
+    // Test if this is the first rodata line
+    if (gpRoLines == NULL)
+    {
+        gpRoLines = pLine;
+        gpRoLines->pNext = gpRoLines;
+        gpRoLines->pPrev = gpRoLines;
+        gpLastRoLine = pLine;
+    }
+    else
+    {
+        insert_asm_line_after(pLine, gpLastRoLine);
+        gpLastRoLine = pLine;
+    }
 }
 
 /*
@@ -1301,7 +1525,7 @@ static void do_emit_assign_deref(Type *ty, int off) {
         pFrame->accOnStack = 0;
     }
     emit("stax      %d(ix)", off);
-    if (ty->ptr->size > 1)
+    if (ty->ptr && ty->ptr->size > 1)
     {
         emit("swap      1(sp)");
         emit("stax      %d(ix)", off + 1);
@@ -1330,28 +1554,33 @@ Generate code for pointer arithemetic
 */
 static void emit_pointer_arith(char kind, Node *left, Node *right) {
     SAVE;
-    int     needPush = 1;
-    int     rkind;
-    int     size;
-    const char   *op;
+    int         needPush = 1;
+    int         rkind;
+    int         size;
+    int         virtOff;
+    const char  *op;
 
     rkind = right->kind;
     size = right->ty ? right->ty->size : 0;
     if ((rkind == AST_LITERAL || rkind == AST_LVAR ||
         (rkind == AST_GVAR && (right->ty->issfr || right->ty->isaccess))) &&
-        size < 2)
+        (size < 2 || left->ty->size == 1))
     {
         needPush = 0;
     }
+    printf("Pointer Arith: size=%d\n", size);
     emit_expr(left);
     if (needPush)
     {
-        emit("stxx      0(sp)");
-        emit("ads       -2");
-        pFrame->stackPos += 2;
+        virtOff = alloc_virtual_reg_by_size(2);
+        emit("stxx      %d(sp)", pFrame->stackOps + virtOff);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+//        emit("ads       -2");
+//        pFrame->stackPos += 2;
     }
     emit_expr(right);
     size = left->ty->ptr->size;
+    printf("Pointer Arith: left size=%d\n", size);
     if (size == 2 || size == 4)
     {
         if (right->ty->size == 1)
@@ -1369,10 +1598,12 @@ static void emit_pointer_arith(char kind, Node *left, Node *right) {
     }
     if (needPush)
     {
-        emit("ads       2");
-        emit("ldxx      0(sp)");
+//        emit("ads       2");
+        emit("ldxx      %d(sp)", pFrame->stackOps + virtOff);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+        pFrame->virtRegDepth -= 2;
         pFrame->ixVar[0] = 0;
-        pFrame->stackPos -= 2;
+//        pFrame->stackPos -= 2;
     }
     switch (kind) {
         case '+': op = "add"; break;
@@ -1612,12 +1843,46 @@ static void emit_jmp(char *label) {
 
 /*
 ==========================================================================================
+Save stackOp value to virtual reg defined by node
+==========================================================================================
+*/
+static void emit_store_to_virt_reg(Node *node)
+{
+    emit("stax      $%d(sp)", node->virtRegOffset + pFrame->stackOps);
+    if (node->ty->size == 2)
+    {
+        emit("ldax      1(sp)");
+        emit("stax      $%d(sp)", node->virtRegOffset + pFrame->stackOps+1);
+    }
+}
+
+/*
+==========================================================================================
 Generate code for comparisions
 ==========================================================================================
 */
 static int emit_comp(char *usiginst, char *inst, Node *node) {
     char    str[4];
     char    lbl[32];
+    Node   *temp;
+
+    // Test if Left node is LITERAL or LVAR and right is not
+    if ((node->left->kind == AST_LITERAL || node->left->kind == AST_LVAR) &&
+        (node->right->kind != AST_LITERAL && node->right->kind != AST_LVAR))
+    {
+        temp = node->left;
+        node->left = node->right;
+        node->right = temp;
+
+        // Switch left and right nodes and change direction of comparison
+        switch (node->kind)
+        {
+            case '<':  node->kind = '>'; break;
+            case '>':  node->kind = '<'; break;
+            case OP_LE: node->kind = OP_GE; break;
+            case OP_GE: node->kind = OP_LE; break;
+        }
+    }
 
     switch (node->kind)
     {
@@ -1684,12 +1949,21 @@ static int emit_comp(char *usiginst, char *inst, Node *node) {
             asm_line_t *pLine;
 
             emit_expr(node->left);
+            if (node->hasVirtReg)
+                emit_store_to_virt_reg(node);
             emit_expr(node->right);
-            pLine = get_last_asm_line();
-            pLine->pLine[4] = 'c';
-            pLine->pLine[5] = 'm';
-            pLine->pLine[6] = 'p';
-            pLine->pLine[7] = ' ';
+            if (!node->hasVirtReg)
+            {
+                pLine = get_last_asm_line();
+                pLine->pLine[4] = 'c';
+                pLine->pLine[5] = 'm';
+                pLine->pLine[6] = 'p';
+                pLine->pLine[7] = ' ';
+            }
+            else
+            {
+                emit("cmp       $%d(sp)",  node->virtRegOffset + pFrame->stackOps);
+            }
             emit("if        %s", str);
         }
         else
@@ -1872,6 +2146,8 @@ static void emit_add(Node *node) {
     }
 
     emit_expr(node->left);
+    if (node->hasVirtReg)
+        emit_store_to_virt_reg(node);
 
     // Test for simple literal add
     if (node->right->kind == AST_LITERAL)
@@ -1973,15 +2249,26 @@ static void emit_add(Node *node) {
     }
     else
     {
-        // Save LSB to stack and advance by 2
-        emit("stax      0(sp)");
-        emit("ads       -2");
-        pFrame->stackPos += 2;
-        emit_expr(node->right);
-        emit_jmp("__addint");
-        emit_extern("__addint");
-        pFrame->stackPos -= 2;
-        pFrame->accVal = -1000;
+        // Test for 1-byte operation
+        if (node->ty->size == 1)
+        {
+            emit_expr(node->right);
+            if (node->hasVirtReg)
+                emit("add       $%d(sp)", node->virtRegOffset + pFrame->stackOps);
+            pFrame->accVal = -1000;
+        }
+        else
+        {
+            // Save LSB to stack and advance by 2
+            emit("stax      0(sp)");
+            emit("ads       -2");
+            pFrame->stackPos += 2;
+            emit_expr(node->right);
+            emit_jmp("__addint");
+            emit_extern("__addint");
+            pFrame->stackPos -= 2;
+            pFrame->accVal = -1000;
+        }
     }
 }
 
@@ -1996,6 +2283,8 @@ static void emit_sub(Node *node) {
     SAVE;
 
     emit_expr(node->left);
+    if (node->hasVirtReg)
+        emit_store_to_virt_reg(node);
 
     // Test for simple literal add
     if (node->right->kind == AST_LITERAL)
@@ -2099,15 +2388,26 @@ static void emit_sub(Node *node) {
     }
     else
     {
-        // Save LSB to stack and advance by 2
-        emit("stax      0(sp)");
-        emit("ads       -2");
-        pFrame->stackPos += 2;
-        emit_expr(node->right);
-        emit_jmp("__subint");
-        emit_extern("__subint");
-        pFrame->stackPos -= 2;
-        pFrame->accVal = -1000;
+        // Test for 1-byte operation
+        if (node->ty->size == 1)
+        {
+            emit_expr(node->right);
+            if (node->hasVirtReg)
+                emit("sub       $%d(sp)", node->virtRegOffset + pFrame->stackOps);
+            pFrame->accVal = -1000;
+        }
+        else
+        {
+            // Save LSB to stack and advance by 2
+            emit("stax      0(sp)");
+            emit("ads       -2");
+            pFrame->stackPos += 2;
+            emit_expr(node->right);
+            emit_jmp("__subint");
+            emit_extern("__subint");
+            pFrame->stackPos -= 2;
+            pFrame->accVal = -1000;
+        }
     }
 }
 
@@ -2122,25 +2422,35 @@ static void emit_binop_int_mult(Node *node) {
         node->right->ty->size == 1)
     {
         emit_expr(node->left);
-        emit("stax      0(sp)");
-        if (!(node->right->kind == AST_LVAR ||
-              node->right->kind == AST_LVAR ||
-              node->right->kind == AST_LITERAL))
+        if (node->hasVirtReg)
         {
-            emit("ads       -1");
-            pFrame->stackPos += 1;
-            mark_stack_operations(1);
+            emit_store_to_virt_reg(node);
+            emit_expr(node->right);
+            emit("mul       $%d(sp)", node->virtRegOffset + pFrame->stackOps);
+            pFrame->accVal = -1000;
         }
-        emit_expr(node->right);
-        if (!(node->right->kind == AST_LVAR ||
-              node->right->kind == AST_LVAR ||
-              node->right->kind == AST_LITERAL))
+        else
         {
-            emit("ads       1");
-            pFrame->stackPos -= 1;
+            emit("stax      0(sp)");
+            if (!(node->right->kind == AST_LVAR ||
+                  node->right->kind == AST_LVAR ||
+                  node->right->kind == AST_LITERAL))
+            {
+                emit("ads       -1");
+                pFrame->stackPos += 1;
+                mark_stack_operations(1);
+            }
+            emit_expr(node->right);
+            if (!(node->right->kind == AST_LVAR ||
+                  node->right->kind == AST_LVAR ||
+                  node->right->kind == AST_LITERAL))
+            {
+                emit("ads       1");
+                pFrame->stackPos -= 1;
+            }
+            emit("mul       0(sp)");
+            pFrame->accVal = -1000;
         }
-        emit("mul       0(sp)");
-        pFrame->accVal = -1000;
     }
     else
     {
@@ -2559,6 +2869,11 @@ Generate code for binary operations (comparisons)
 */
 static int emit_binop(Node *node) {
     SAVE;
+
+    // Add AST debug output if enabled
+    if (gAstDebug)
+        emit_ast_as_comments(node, gAstMaxLines);
+
     if (node->ty->kind == KIND_PTR) {
         emit_pointer_arith(node->kind, node->left, node->right);
         return 0;
@@ -2890,12 +3205,17 @@ static void emit_post_inc_dec(Node *node, char *op) {
             
             if (node->ty->kind == KIND_INT || node->ty->kind == KIND_SHORT)
             {
+                emit("if        c");
+                emit("inx       1(sp)");
+
+#if 0
                 emit("bnc       6");
                 emit("stax      0(sp)");
                 emit("ldi       1");
                 emit("add       1(sp)");
                 emit("stax      1(sp)");
                 emit("ldax      0(sp)");
+#endif
             }
             pFrame->accVal = node->ival;
         }
@@ -3100,8 +3420,16 @@ static void maybe_print_source_line(char *file, int line)
     for (char **p = lines; *p; p++)
         len++;
     //gMaybeEmitLine = format("# %s", lines[line - 1]);
+
+    // Test if this line already emitted
+    if (pFrame->linePrinted[line-2] & 1)
+        line = 0;
+
     if (line > 1)
+    {
         emit_nostack("// %s", lines[line - 2]);
+        pFrame->linePrinted[line-2] |= 1;
+    }
 }
 
 /*
@@ -3128,7 +3456,11 @@ static void maybe_print_source_loc(Node *node)
     char *loc = format(".loc %ld %d 0", fileno, node->sourceLoc->line);
     if (strcmp(loc, last_loc)) {
         //gMaybeEmitLoc  = loc;
-        emit("%s", loc);
+        if (!(pFrame->linePrinted[node->sourceLoc->line] & 2))
+        {
+            emit("%s", loc);
+            pFrame->linePrinted[node->sourceLoc->line] |= 2;
+        }
         maybe_print_source_line(file, node->sourceLoc->line);
     }
     last_loc = loc;
@@ -3378,8 +3710,8 @@ no_lines:
             else if (v->ty->kind == KIND_SHORT || v->ty->kind == KIND_INT ||
                      v->ty->kind == KIND_CHAR)
             {
-                if (v->ty->kind == KIND_CHAR)
-                    emit_intcast(v->ty);
+//                if (v->ty->kind == KIND_CHAR)
+//                    emit_intcast(v->ty);
                 emit("stax      0(sp)");
                 emit("ads       -2");
                 pFrame->stackPos += 2;
@@ -3528,11 +3860,43 @@ static void emit_conv(Node *node)
     {
         char *file = node->sourceLoc->file;
         int lineno = node->sourceLoc->line;
-        if (node->operand->ival < 0)
-            printf("%s:%d: Warning: cast of negative number to PTR\n", file, lineno);
-        if (node->operand->ival > 32767)
-            printf("%s:%d: Warning: cast to PTR truncated\n", file, lineno);
-        emit("ldx       %d", node->operand->ival);
+        if (node->declvar && node->declvar->ty->kind == KIND_ARRAY)
+        {
+            char *str = make_label();
+
+            // Create Temp Label
+            asm_line_t *pLine3 = (asm_line_t *) malloc(sizeof(asm_line_t));
+            pLine3->pLine = (char *) malloc(10 + strlen(str));
+            sprintf(pLine3->pLine, "%s:", str);
+            pLine3->stackRelative = 0;
+            add_rodata_line(pLine3);
+
+            // Create string
+            asm_line_t *pLine2 = (asm_line_t *) malloc(sizeof(asm_line_t));
+            pLine2->pLine = (char *) malloc(20 + strlen(node->declvar->sval));
+            pLine2->stackRelative = 0;
+            sprintf(pLine2->pLine, "    .db   \"%s\", 0", quote_cstring(node->declvar->sval));
+            add_rodata_line(pLine2);
+
+#if 0
+            // Create string
+            asm_line_t *pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+            pLine->pLine = (char *) malloc(20 + strlen(node->declvar->sval));
+            pLine->stackRelative = 0;
+            sprintf(pLine->pLine, "    .db   0");
+            add_rodata_line(pLine);
+#endif
+
+            emit("ldx       %s", str);
+        }
+        else
+        {
+            if (node->operand->ival < 0)
+                printf("%s:%d: Warning: cast of negative number to PTR\n", file, lineno);
+            if (node->operand->ival > 32767)
+                printf("%s:%d: Warning: cast to PTR truncated\n", file, lineno);
+            emit("ldx       %d", node->operand->ival);
+        }
         clear_ix_var();
         pFrame->ixDestroyed = 1;
         return;
@@ -3543,8 +3907,11 @@ static void emit_conv(Node *node)
 
 static void emit_deref(Node *node)
 {
+    // Add AST debug output if enabled
+    if (gAstDebug)
+        emit_ast_as_comments(node, gAstMaxLines);
+
     SAVE;
-    printf("Emit DEFEF\n");
     emit_expr(node->operand);
     emit_lload(node, node->operand->ty->ptr, "ix", 0);
     emit_load_convert(node->ty, node->operand->ty->ptr);
@@ -4185,6 +4552,146 @@ static void emit_comma(Node *node)
 
 /*
 ==========================================================================================
+Generate code to assign INT assign based on simple binop +/-
+
+This will generate code like:
+
+    // Arbitrary number
+    ldi     254         // Get LSB of number (-2)
+    add     6(sp)       // Add to LSB of left LVAR
+    stax    4(sp)       // Store in LSB to assignee
+    savec               // Save C (the following ldi clears it)
+    ldi     255         // Load MSB of -2
+    restc               // Restore C
+    add     7(sp)       // Add MSB of left LVAR
+    stax    5(sp)       // Save MSB to assignee
+
+    OR
+
+    ldax    6(sp)       // Get LSB of left
+    stax    4(sp)       // Save in LSB of assignee
+    ldax    7(sp)       // Get MSB of left
+    stax    5(sp)       // Save in MSB of assignee
+    inx     4(sp)       // Increment LSB the asigneed to effect the +1
+    if  c               // Test for 8-bit overflow
+    inx     5(sp)       // Increment MSB of assingee
+
+==========================================================================================
+*/
+static void emit_assign_int_simple_binop(Node *node)
+{
+    SAVE;
+    Node *left = node->left;
+    Node *right = node->right;
+    Node *binop_left = right->left;
+    Node *binop_right = right->right;
+
+    // For subtraction of negative literal, convert to addition of positive
+    if (right->kind == '-' && binop_right->kind == AST_LITERAL && 
+        binop_right->ival < 0) {
+        right->kind = '+';
+        binop_right->ival = -binop_right->ival;
+    }
+
+    // Handle literal case
+    if (binop_right->kind == AST_LITERAL) {
+        // Special case for +/-1 using inx/dcx
+        if (binop_right->ival == 1) {
+            // First copy binop_left to target
+            emit("ldax      %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+                 binop_left->loff + pFrame->stackPos);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            emit("stax      %d(sp)", left->loff + pFrame->stackPos);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+            emit("ldax      %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+                 binop_left->loff + pFrame->stackPos + 1);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            emit("stax      %d(sp)", left->loff + pFrame->stackPos + 1);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+
+            // Now increment/decrement target
+            if (right->kind == '+') {
+                emit("inx       %d(sp)", left->loff + pFrame->stackPos);
+                pFrame->pAsmLines->pPrev->stackRelative = 1;
+                emit("if        c");
+                emit("inx       %d(sp)", left->loff + pFrame->stackPos + 1);
+                pFrame->pAsmLines->pPrev->stackRelative = 1;
+            } else {
+                emit("dcx       %d(sp)", left->loff + pFrame->stackPos);
+                pFrame->pAsmLines->pPrev->stackRelative = 1;
+                emit("if        c");
+                emit("dcx       %d(sp)", left->loff + pFrame->stackPos + 1);
+                pFrame->pAsmLines->pPrev->stackRelative = 1;
+            }
+        }
+        // Handle arbitrary literal value
+        else {
+            // Get LSB of literal
+            emit("ldi       %d", binop_right->ival & 0xFF);
+            
+            // Add to LSB of source
+            emit("add       %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+                 binop_left->loff + pFrame->stackPos);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+            // Store in LSB of target
+            emit("stax      %d(sp)", left->loff + pFrame->stackPos);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+            // Save carry for MSB operation
+            emit("savec");
+            
+            // Get MSB of literal 
+            emit("ldi       %d", (binop_right->ival >> 8) & 0xFF);
+            
+            // Restore carry from LSB operation
+            emit("restc");
+            
+            // Add to MSB of source
+            emit("add       %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+                 binop_left->loff + pFrame->stackPos + 1);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+            // Store in MSB of target
+            emit("stax      %d(sp)", left->loff + pFrame->stackPos + 1);
+            pFrame->pAsmLines->pPrev->stackRelative = 1;
+        }
+    }
+    // Handle variable case
+    else if (binop_right->kind == AST_LVAR || binop_right->kind == AST_GVAR) {
+        // Load LSB of right operand
+        emit("ldax      %s%d(sp)", binop_right->ty->isparam ? "$" : "",
+             binop_right->loff + pFrame->stackPos);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+        // Add to LSB of left operand
+        emit("add       %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+             binop_left->loff + pFrame->stackPos);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+        // Store in LSB of target
+        emit("stax      %d(sp)", left->loff + pFrame->stackPos);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+        
+        // Load MSB of right operand
+        emit("ldax      %s%d(sp)", binop_right->ty->isparam ? "$" : "",
+             binop_right->loff + pFrame->stackPos + 1);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+        // Add to MSB of left operand
+        emit("add       %s%d(sp)", binop_left->ty->isparam ? "$" : "",
+             binop_left->loff + pFrame->stackPos + 1);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+            
+        // Store in MSB of target
+        emit("stax      %d(sp)", left->loff + pFrame->stackPos + 1);
+        pFrame->pAsmLines->pPrev->stackRelative = 1;
+    }
+}
+
+/*
+==========================================================================================
 Generate code to assign to a variable
 ==========================================================================================
 */
@@ -4192,6 +4699,10 @@ static void emit_assign(Node *node)
 {
     SAVE;
     char    varAddr[256];
+
+    // Add AST debug output if enabled
+    if (gAstDebug)
+        emit_ast_as_comments(node, gAstMaxLines);
 
     asm_line_t  *pLine;
     if (node->left->ty->kind == KIND_STRUCT &&
@@ -4201,9 +4712,24 @@ static void emit_assign(Node *node)
     }
     else
     {
+        Node *left = node->left;
+        Node *right = node->right;
+
+        // Test for simple assignment to INT using +/-
+        if ((left->kind == AST_LVAR || left->kind == AST_GVAR) &&
+             (right->kind == '+' || right->kind == '-') &&
+             (right->left->kind == AST_LVAR || right->left->kind == AST_GVAR) &&
+             (right->right->kind == AST_LVAR || right->right->kind == AST_GVAR ||
+              right->right->kind == AST_LITERAL) &&
+            (node->ty->kind == KIND_INT || 
+             node->ty->kind == KIND_SHORT) )
+        {
+            emit_assign_int_simple_binop(node);
+        }
+
         // Test for simple assignment
-        if (node->right->kind == AST_LITERAL &&
-            node->right->ty->kind == KIND_CHAR)
+        else if (right->kind == AST_LITERAL &&
+            right->ty->kind == KIND_CHAR)
         {
             // Test for literal assign to struct that is a bitfield
             if (!(node->left->kind == AST_STRUCT_REF && node->left->ty->bitsize > 0))
@@ -4213,6 +4739,7 @@ static void emit_assign(Node *node)
             // Test for SFR
             if (node->left->ty->issfr)
                 emit("sta       %s", node->left->varname);
+
             // Test for LVAR
             else if (node->left->kind == AST_LVAR)
             {
@@ -4421,61 +4948,69 @@ Emit Expression
 */
 static int emit_expr(Node *node)
 {
+    int ret = 0;
+
     SAVE;
     if (node->kind != AST_GVAR && node->kind != AST_LVAR)
         maybe_print_source_loc(node);
+
     switch (node->kind) {
-    case AST_LITERAL: emit_literal(node); return 0;
-    case AST_LVAR:    emit_lvar(node); return 0;
-    case AST_GVAR:    emit_gvar(node); return 0;
-    case AST_FUNCDESG: emit_addr(node); return 0;
+    case AST_LITERAL: emit_literal(node); goto maybe_dealloc;
+    case AST_LVAR:    emit_lvar(node); goto maybe_dealloc;
+    case AST_GVAR:    emit_gvar(node); goto maybe_dealloc;
+    case AST_FUNCDESG: emit_addr(node); goto maybe_dealloc;
     case AST_FUNCALL:
         if (maybe_emit_builtin(node))
-            return 0;
+            goto maybe_dealloc;
         // fall through
     case AST_FUNCPTR_CALL:
         emit_func_call(node);
-        return 0;
-    case AST_DECL:    emit_decl(node); return 0;
-    case AST_CONV:    emit_conv(node); return 0;
-    case AST_ADDR:    emit_addr(node->operand); return 0;
-    case AST_DEREF:   emit_deref(node); return 0;
+        goto maybe_dealloc;
+    case AST_DECL:    emit_decl(node); goto maybe_dealloc;
+    case AST_CONV:    emit_conv(node); goto maybe_dealloc;
+    case AST_ADDR:    emit_addr(node->operand); goto maybe_dealloc;
+    case AST_DEREF:   emit_deref(node); goto maybe_dealloc;
     case AST_IF:
     case AST_TERNARY:
         emit_ternary(node);
-        return 0;
-    case AST_GOTO:    emit_goto(node); return 0;
+        goto maybe_dealloc;
+    case AST_GOTO:    emit_goto(node); goto maybe_dealloc;
     case AST_LABEL:
         if (node->newlabel)
             emit_label(node->newlabel);
-        return 0;
-    case AST_RETURN:  emit_return(node); return 0;
-    case AST_COMPOUND_STMT: emit_compound_stmt(node); return 0;
+        goto maybe_dealloc;
+    case AST_RETURN:  emit_return(node); goto maybe_dealloc;
+    case AST_COMPOUND_STMT: emit_compound_stmt(node); goto maybe_dealloc;
     case AST_STRUCT_REF:
         emit_load_struct_ref(node, node->struc, node->ty, 0);
-        return 0;
-    case OP_PRE_INC:   emit_pre_inc_dec(node, "add"); return 0;
-    case OP_PRE_DEC:   emit_pre_inc_dec(node, "sub"); return 0;
-    case OP_POST_INC:  emit_post_inc_dec(node, "add"); return 0;
-    case OP_POST_DEC:  emit_post_inc_dec(node, "sub"); return 0;
-    case '!': emit_lognot(node); return 0;
-    case '&': emit_bitand(node); return 0;
-    case '|': emit_bitor_xor(node); return 0;
-    case '^': emit_bitor_xor(node); return 0;
-    case '~': emit_bitnot(node); return 0;
-    case OP_LOGAND: emit_logand(node); return 0;
-    case OP_LOGOR:  emit_logor(node); return 0;
-    case OP_CAST:   emit_cast(node); return 0;
-    case ',': emit_comma(node); return 0;
-    case '=': emit_assign(node); return 0;
-    case OP_LABEL_ADDR: emit_label_addr(node); return 0;
-    case AST_COMPUTED_GOTO: emit_computed_goto(node); return 0;
-    case AST_PRUNED: return 0;
+        goto maybe_dealloc;
+    case OP_PRE_INC:   emit_pre_inc_dec(node, "add"); goto maybe_dealloc;
+    case OP_PRE_DEC:   emit_pre_inc_dec(node, "sub"); goto maybe_dealloc;
+    case OP_POST_INC:  emit_post_inc_dec(node, "add"); goto maybe_dealloc;
+    case OP_POST_DEC:  emit_post_inc_dec(node, "sub"); goto maybe_dealloc;
+    case '!': emit_lognot(node); goto maybe_dealloc;
+    case '&': emit_bitand(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case '|': emit_bitor_xor(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case '^': emit_bitor_xor(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case '~': emit_bitnot(node); goto maybe_dealloc;
+    case OP_LOGAND: emit_logand(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case OP_LOGOR:  emit_logor(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case OP_CAST:   emit_cast(node); goto maybe_dealloc;
+    case ',': emit_comma(node); goto maybe_dealloc;
+    case '=': emit_assign(node); maybe_alloc_virtual_reg(node); goto maybe_dealloc;
+    case OP_LABEL_ADDR: emit_label_addr(node); goto maybe_dealloc;
+    case AST_COMPUTED_GOTO: emit_computed_goto(node); goto maybe_dealloc;
+    case AST_PRUNED: goto maybe_dealloc;
     default:
-        return emit_binop(node);
+        maybe_alloc_virtual_reg(node);
+        ret = emit_binop(node);
     }
 
-    return 0;
+maybe_dealloc:
+    if (node->hasVirtReg)
+        pFrame->virtRegDepth -= node->ty->size;
+
+    return ret;
 }
 
 static void emit_zero(int size)
@@ -4517,12 +5052,12 @@ static void emit_data_addr(Node *operand, int depth)
 
 static void emit_data_charptr(char *s, int depth)
 {
-    char *label = make_label();
-    emit(".data      %d", depth + 1);
-    emit_label(label);
+//    char *label = make_label();
+//    emit(".data      %d", depth + 1);
+//    emit_label(label);
     emit(".db        \"%s\"", quote_cstring(s));
-    emit(".data      %d", depth);
-    emit(".quad      %s", label);
+    emit(".db        %d", 0);
+//    emit(".quad      %s", label);
 }
 
 static void emit_data_primtype(Type *ty, Node *val, int depth)
@@ -4552,6 +5087,7 @@ static void emit_data_primtype(Type *ty, Node *val, int depth)
     case KIND_LONG:
     case KIND_LLONG:
     case KIND_PTR:
+        printf("Emit PTR\n");
         if (val->kind == OP_LABEL_ADDR)
         {
             emit(".quad %s", val->newlabel);
@@ -4636,12 +5172,23 @@ static void do_emit_data(Vector *inits, int size, int off, int depth)
 static void emit_data(Node *v, int off, int depth)
 {
     SAVE;
-    if (strcmp(gpCurrSegment, ".data") != 0)
+    if (v->declvar->ty->kind == KIND_PTR)
     {
-      gpCurrSegment = ".data";
-      emit(".section .data");
+        if (strcmp(gpCurrSegment, ".text") != 0)
+        {
+          gpCurrSegment = ".text";
+          emit(".section .text");
+        }
     }
-    gEmitToDataSection = 1;
+    else
+    {
+        if (strcmp(gpCurrSegment, ".data") != 0)
+        {
+          gpCurrSegment = ".data";
+          emit(".section .data");
+        }
+        gEmitToDataSection = 1;
+    }
     if (!v->declvar->ty->isstatic)
         emit(".public %s", v->declvar->glabel);
     else
@@ -4743,6 +5290,59 @@ static void calc_func_params(Vector *params)
     }
 }
 
+/*
+==========================================================================================
+Tests if ra changed in the routine and adds sra / lra plus updates all offsets to
+stack paramters.
+==========================================================================================
+*/
+#if 0
+static void adjust_prolog_for_virtual_regs(void)
+{
+    asm_line_t  *pLine;
+    asm_line_t  *pRef;
+    char        str[128];
+
+    // Test if we should load VirtualRegs base to a local __vr variable
+    if (pFrame->virtRegsUsed)
+    {
+        // Find the "ads" line
+        pRef = pFrame->pAsmLines;
+        while (pRef->pNext != pFrame->pAsmLines)
+        {
+            if (strstr(pRef->pLine, "    ads  ") != NULL)
+                break;
+            pRef = pRef->pNext;
+        }
+
+        pRef = pRef->pNext;
+
+        // Okay, ads line found.  Now load the virtual register base from M[0]/M[1]
+        pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine->pLine = strdup("    lda   0");
+        insert_asm_line_before(pLine, pRef);
+
+        pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine->pLine = strdup("    tax");
+        insert_asm_line_before(pLine, pRef);
+
+        pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine->pLine = strdup("    lda   1");
+        insert_asm_line_before(pLine, pRef);
+
+        pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+        pLine->pLine = strdup("    taxu");
+        insert_asm_line_before(pLine, pRef);
+
+        // Save the IX virtual reg base address on the stack
+        pLine = (asm_line_t *) malloc(sizeof(asm_line_t));
+        sprintf(str, "stxx      #%d(sp)", pFrame->stackOps);
+        pLine->pLine = strdup(str);
+        insert_asm_line_before(pLine, pRef);
+    }
+}
+#endif
+        
 /*
 ==========================================================================================
 Tests if ra changed in the routine and adds sra / lra plus updates all offsets to
@@ -4869,6 +5469,8 @@ static void emit_func_prologue(Node *func)
     {
       gpCurrSegment = ".text";
       emit("\n    .section .text");
+      if (gpExternsLine == NULL)
+        gpExternsLine = pFrame->pAsmLines->pPrev;
     }
     if (!func->ty->isstatic)
         emit_noindent("\n    .public %s", func->fname);
@@ -4924,6 +5526,7 @@ static void emit_func_prologue(Node *func)
     emit("ads       %d", -pFrame->localArea);
     pFrame->pAdsLine = pFrame->pAsmLines->pPrev;
     pFrame->stackOps = 0;
+    pFrame->stackUtil = 0;
 }
 
 /*
@@ -5836,7 +6439,6 @@ int optimize_logand_logor_iftt(void)
                             free(pL3->pLine);
                             strcat(jumpLabel, "b");
                             char line[512];
-        emit("//here");
                             sprintf(line, "    jal       %s", jumpLabel);
                             pL3->pLine = strdup(line);
 
@@ -6313,6 +6915,57 @@ int optimize_literal_init(void)
 
 /*
 ==========================================================================================
+Optimize push_ix / ads 2 for calls to puts_c.
+==========================================================================================
+*/
+int optimize_puts_c_stack(void)
+{
+    asm_line_t  *pL1; 
+    asm_line_t  *pL2; 
+    asm_line_t  *pL3; 
+    int         changes = 0;
+
+    // Scan all lines seaching for shr, andi, if
+    pL1 = pFrame->pAsmLines->pNext;
+    while (pL1 != pFrame->pAsmLines)
+    {
+        // Test for "    push_ix"
+        if (strcmp(pL1->pLine, "    push_ix") == 0)
+        {
+            // Get the next line
+            pL2 = get_next_asm_line(pL1);
+            if (pL2 == NULL)
+                break;
+
+            // Get line aftrer that
+            pL3 = get_next_asm_line(pL2);
+            if (pL3 == NULL)
+                break;
+
+            // Test next two lines
+            if (strcmp(pL2->pLine, "    jal       puts_c") == 0 &&
+                strcmp(pL3->pLine, "    ads       2") == 0)
+            {
+                // Okay, remove the pL1 and pL3 lines
+                delete_asm_line(pL1);
+                delete_asm_line(pL3);
+                
+                // Update pL1 to point to a valid line
+                pL1 = pL2;
+
+                changes++;
+            }
+        }
+
+        pL1 = pL1->pNext;
+    }
+
+    return changes;
+}
+
+
+/*
+==========================================================================================
 Determine opts base on optimization level
 ==========================================================================================
 */
@@ -6353,6 +7006,9 @@ static void perform_asm_optimizations(void)
 {
     int     changes;
     opts_t  opt;
+
+    if (gOptimizationLevel == '0')
+        return;
 
     // Count references to all labels
     count_label_refs();
@@ -6420,6 +7076,10 @@ static void perform_asm_optimizations(void)
         if (opt.literal_init)
             changes += optimize_literal_init();
 
+        // Optimize push_ix for puts_c (not needed)
+        // opcodes left after other optimizations
+        changes += optimize_puts_c_stack();
+        
     } while (changes > 0);
 }
 
@@ -6428,34 +7088,49 @@ static void perform_asm_optimizations(void)
 Generate code for a top level node.  This will be a global or a function.
 ==========================================================================================
 */
-void emit_toplevel(Node *v) {
-    stack_frame_t frame;
-    asm_line_t    *pLine;
+void emit_toplevel(Node *v)
+{
+    stack_frame_t * frame;
+
+    pFrame = (stack_frame_t *) malloc(sizeof(stack_frame_t));
+    if (gpFirstFrame == NULL)
+        gpFirstFrame = pFrame;
+    else
+    {
+        frame = gpFirstFrame;
+        while (frame->pNext != NULL)
+            frame = frame->pNext;
+        frame->pNext = pFrame;
+    }
 
     gLastEmitWasRet         = 0;
     gLastEmitWasJal         = 0;
-    frame.stackPos          = 0;
-    frame.localArea         = 0;
-    frame.raDestroyed       = 0;
-    frame.ixDestroyed       = 0;
-    frame.nlvars            = 0;
-    frame.nparam            = 0;
-    frame.retCount          = 0;
-    frame.nlocalLabels      = 0;
-    frame.preserveVars      = 0;
-    frame.nexternLabels     = 0;
-    frame.lastSwapOptional  = 0;
-    frame.isTernary         = 0;
-    frame.emitCompZero      = 0;
-    frame.noBitShiftStruc   = 0;
-    frame.pAsmLines         = NULL;
-    frame.pDataLines        = NULL;
-    frame.pLabelRefs        = NULL;
-    frame.accVal            = -1000;
-    frame.accOnStack        = 0;
-    frame.fname             = v->fname;
-    frame.func              = v;
-    pFrame = &frame;
+    pFrame->stackPos          = 0;
+    pFrame->localArea         = 0;
+    pFrame->raDestroyed       = 0;
+    pFrame->ixDestroyed       = 0;
+    pFrame->nlvars            = 0;
+    pFrame->nparam            = 0;
+    pFrame->retCount          = 0;
+    pFrame->nlocalLabels      = 0;
+    pFrame->preserveVars      = 0;
+    pFrame->nexternLabels     = 0;
+    pFrame->lastSwapOptional  = 0;
+    pFrame->isTernary         = 0;
+    pFrame->emitCompZero      = 0;
+    pFrame->noBitShiftStruc   = 0;
+    pFrame->pAsmLines         = NULL;
+    pFrame->pDataLines        = NULL;
+    pFrame->pLabelRefs        = NULL;
+    pFrame->accVal            = -1000;
+    pFrame->accOnStack        = 0;
+    pFrame->virtRegsUsed      = 0;
+    pFrame->virtRegDepth      = 0;
+    pFrame->virtRegMaxDepth   = 0;
+    pFrame->fname             = v->fname;
+    pFrame->func              = v;
+    pFrame->pNext             = NULL;
+    memset(pFrame->linePrinted, 0, sizeof(pFrame->linePrinted));
       
     if (v->kind == AST_FUNC) {
         emit_func_prologue(v);
@@ -6475,38 +7150,69 @@ void emit_toplevel(Node *v) {
     } else {
         error("internal error");
     }
+}
 
-    // Write all pFrame->pAsmLines to the file
-    pLine = frame.pAsmLines;
-    while (pLine)
+void write_all_frames(void)
+{
+    asm_line_t *pLine;
+    pFrame = gpFirstFrame;
+
+    while (pFrame)
     {
-        // Test for '$' stack modifiers
-        if (pLine->pLine[14] == '$')
-            memmove(&pLine->pLine[14], &pLine->pLine[15], 
-                    strlen(&pLine->pLine[15])+1);
-        fprintf(outputfp, "%s\n", pLine->pLine);
-        pLine = pLine->pNext;
-        if (pLine == frame.pAsmLines)
-            pLine = NULL;
-    }
-
-    // Write all pFrame->pAsmLines to the file
-    pLine = frame.pDataLines;
-    if (pLine)
-        if (strcmp(gpCurrSegment, ".data") != 0)
+        // Write all pFrame->pAsmLines to the file
+        pLine = pFrame->pAsmLines;
+        while (pLine)
         {
-          gpCurrSegment = ".data";
-          fprintf(outputfp, "\n    .section .data\n\n");
+            // Test for '$' stack modifiers
+            if (pLine->pLine[14] == '$')
+                memmove(&pLine->pLine[14], &pLine->pLine[15], 
+                        strlen(&pLine->pLine[15])+1);
+            fprintf(outputfp, "%s\n", pLine->pLine);
+            pLine = pLine->pNext;
+            if (pLine == pFrame->pAsmLines)
+                pLine = NULL;
         }
+        
+        // Write all pFrame->pAsmLines to the file
+        pLine = pFrame->pDataLines;
+        if (pLine)
+            if (strcmp(gpCurrSegment, ".data") != 0)
+            {
+              gpCurrSegment = ".data";
+              fprintf(outputfp, "\n    .section .data\n\n");
+            }
+        while (pLine)
+        {
+            fprintf(outputfp, "%s\n", pLine->pLine);
+            pLine = pLine->pNext;
+            if (pLine == pFrame->pDataLines)
+                pLine = NULL;
+        }
+        if (pFrame->pDataLines)
+            fprintf(outputfp, "\n");
+
+        // Next frame
+        pFrame = pFrame->pNext;
+    }
+
+    // Now emit rodata lines
+    if (gpRoLines != NULL)
+    {
+        fprintf(outputfp, "\n// ================================================================================\n");
+        fprintf(outputfp, "// Read Only Data Sections\n");
+        fprintf(outputfp, "// ================================================================================\n");
+    }
+    pLine = gpRoLines;
     while (pLine)
     {
+        // Print to file
         fprintf(outputfp, "%s\n", pLine->pLine);
+
+        // Next line
         pLine = pLine->pNext;
-        if (pLine == frame.pDataLines)
-            pLine = NULL;
+        if (pLine == gpRoLines)
+            break;
     }
-    if (frame.pDataLines)
-        fprintf(outputfp, "\n");
 }
 
 // vim: sw=4 ts=4

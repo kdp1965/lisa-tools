@@ -346,6 +346,7 @@ bool CParser::TestForSegment(char* sLine, CParserFile* pFile, int32_t& err)
         segment->type = sToken;
         segment->name = segmentName;
         m_pSpec->m_Segments.insert(std::pair<std::string, ResourceSection_t*>(segmentName, segment));
+        m_pSpec->m_SegOrder.push_back(segmentName);
         m_LastSegment = segment;
 
         err = ERROR_NONE;
@@ -1202,10 +1203,21 @@ bool CParser::TestForLabel(char* sLine, CParserFile* pFile, int32_t& err)
     std::stringstream   err_str;
     std::string         labelName;
     int                 defined;
+    int                 x;
 
     // Test for a ':' symbol
     if (strchr(sLine, ':') != NULL)
     {
+        // Verify the ':' is not within a string
+        for (x = 0; x < strlen(sLine); x++)
+        {
+            // First space or quote nullifies the :
+            if (sLine[x] == ' ' || sLine[x] == '"')
+                return false;
+            else if (sLine[x] == ':')
+                break;
+        }
+
         // Process the label only if in an assemble state
         if (m_IfStat[m_IfDepth] != IF_STAT_ASSEMBLE)
         {
@@ -2649,6 +2661,33 @@ int32_t CParser::ParseLine(const char* sLine, CParserFile* pFile)
 
 /* 
 =============================================================================
+Get the file path of the opened file
+=============================================================================
+*/
+int CParser::GetFilePath(FILE *fp, std::string &filePath)
+{
+    if (!fp)
+        return -1;
+
+    int fd = fileno(fp);
+    if (fd < 0)
+        return -2;
+
+    char procPath[512];
+    snprintf(procPath, sizeof(procPath), "/proc/self/fd/%d", fd);
+
+    char resolvedPath[PATH_MAX];
+    ssize_t len = readlink(procPath, resolvedPath, sizeof(resolvedPath) - 1);
+    if (len < 0)
+        return -3;
+
+    resolvedPath[len] = '\0';
+    filePath = resolvedPath;
+    return 0;
+}
+
+/* 
+=============================================================================
 Parse an input file.  This may be called recursively in the case an 
 'include' directive is encountered.
 =============================================================================
@@ -2662,6 +2701,7 @@ int32_t CParser::ParseFile(const char *pFilename, CParseCtx* pSpec)
     bool        parseFailed;
     char*       pComment;
     bool        comment_block = false;
+    std::string filePath;
 
     // Try to open the file
     if ((fd = fopen(pFilename, "r")) == NULL)
@@ -2673,6 +2713,9 @@ int32_t CParser::ParseFile(const char *pFilename, CParseCtx* pSpec)
     // Initialize the CParserFile
     file.m_Filename = pFilename;
     file.m_Line = 0;
+
+    // Get the file path
+    GetFilePath(fd, pSpec->m_Filepath);
 
     // Save the assemply spec
     if (pSpec != NULL)

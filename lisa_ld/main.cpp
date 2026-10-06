@@ -22,7 +22,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <getopt.h>
+#include <unistd.h>
 
 #include "parser.h"
 #include "linker.h"
@@ -60,7 +62,11 @@ int main(int argc, char* argv[])
     bool            binaryOutput = false;
     bool            mixed = false;
     bool            mapFile = false;
+    bool            listFile = false;
+    bool            nostartfiles = false;
+    bool            nostdlib = false;
     int             c;
+    char            path[1024];
 
     // Test if resource script provided
     if (argc < 2)
@@ -70,16 +76,28 @@ int main(int argc, char* argv[])
     }
 
     // Parse options
-    while ((c = getopt(argc, argv, "D:g:hl:L:mMo:T:")) != -1)
+    while ((c = getopt(argc, argv, "csD:g:hlL:mMo:T:t")) != -1)
     {
         switch (c)
         {
+        case 'c':
+            nostdlib = true;
+            break;
+
+        case 's':
+            nostartfiles = true;
+            break;
+
         case 'g':
             debugLevel = atoi(optarg);
             break;
 
         case 'M':
             mapFile = true;
+            break;
+
+        case 't':
+            listFile = true;
             break;
 
         case 'D':
@@ -147,6 +165,62 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    ssize_t count = readlink("/proc/self/exe", path, sizeof(path));
+    if (count != -1)
+    {
+        path[count] = '\0';
+    }
+
+    // Path includes the filename.  Get the base
+    c = strlen(path) - 1;
+    while (c > 0)
+        if (path[--c] == '/')
+            break;
+    while (c > 0)
+        if (path[--c] == '/')
+            break;
+    if (c > 0)
+        path[c] = 0;
+
+    // Add default library path
+    strcat(path, "/lisa_as/lib");
+    linker.AddLibPath(path);
+    if (!nostdlib)
+        linker.AddLibrary("libc.a");
+
+    // Open all libraries
+    linker.OpenLibraries();
+
+    // Add crt0.rel
+    // Search for library in all Lib paths
+    if (!nostartfiles)
+    {
+        for (auto path : spec.m_LibPaths)
+        {
+            // Create the path
+            std::string libPath = path + "crt0.rel";
+
+            // Try to open the library
+            std::ifstream infile(libPath);
+            if (infile.is_open())
+            {
+                // Create a new CFile class for this file
+                pFile = new CFile(&spec);
+                pFile->m_Filename = "crt0.rel";
+
+                // Parse the resource script provided
+                pFile->m_DebugLevel = debugLevel;
+                if ((err = pFile->LoadRelFile(libPath.c_str())) != ERROR_NONE)
+                    exit(err);
+
+                // Add this file to our list
+                linker.m_FileList.push_back(pFile);
+
+                break;
+            }
+        }
+    }
+
     // The remaining arguments are input files.  Parse each one
     for (c = optind; c < argc; c++)
     {
@@ -167,6 +241,7 @@ int main(int argc, char* argv[])
     linker.m_DebugLevel = debugLevel;
     linker.m_Mixed = mixed;
     linker.m_MapFile = mapFile;
+    linker.m_ListFile = listFile;
     err = linker.Link(pOut);
     if (err != ERROR_NONE)
         return err;

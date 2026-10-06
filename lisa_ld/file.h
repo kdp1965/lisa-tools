@@ -22,11 +22,14 @@
 #ifndef FILE_H
 #define FILE_H
 
+#include <vector>
 #include "parser.h"
 
 #define REL_TYPE_EXTERN     1
 #define REL_TYPE_FUNCTION   2
 #define REL_TYPE_SYMBOL     3
+
+class CLinker;
 
 class CRelocation
 {
@@ -41,9 +44,9 @@ class CRelocation
         std::string     m_Label;
 };
 
-typedef std::map<std::string, int> StrIntMap_t;
 typedef std::list<CRelocation *> RelocationList_t;
 
+class CFile;
 class CFileSection
 {
     public:
@@ -55,6 +58,7 @@ class CFileSection
 
         std::string         m_Filename;
         std::string         m_Name;
+        CFile*              m_pFile;
         int                 m_Address;
         int                 m_Line;
         StrIntMap_t         m_PublicLabels;
@@ -70,6 +74,7 @@ class CFileSection
 };
 
 typedef std::map<std::string, CFileSection *> FileSectionMap_t;
+typedef std::vector<std::string> FileSectionList_t;
 
 class CFile
 {
@@ -81,6 +86,9 @@ class CFile
         int                 m_DebugLevel;
         std::string         m_Filename;
         FileSectionMap_t    m_FileSections;
+        FileSectionList_t   m_SectionOrder;
+        int                 m_Offset;
+        int                 m_Lines;
 
     private:
         /// Parses a single line from a CParseCtx file
@@ -94,15 +102,17 @@ class CFile
         int                 ParseExtern(CParserFile* pFile);
         int                 ParseRelocation(CParserFile* pFile);
         int                 ParseUninitializedAlloc(CParserFile* pFile);
-
+        int                 ParseSourceFile(CParserFile* pFile);
 
     private:
         CFileSection       *m_ActiveSection;
         std::string         m_Args[8];
+        std::string         m_SourceFile;
         int                 m_Argc;
 
         /// Pointer to the CParseCtx we are parsing into
         CParseCtx*          m_pSpec;
+        CLinker*            m_pLinker;
 };
 
 typedef std::list<CFile *> FileList_t;

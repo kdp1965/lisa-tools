@@ -165,12 +165,15 @@ typedef std::map<std::string, CLabel *> StrLabelMap_t;
 class CSection
 {
 public:
-    CSection()      { m_pMem = NULL; m_pAtMem = NULL; }
+    CSection()      { m_pMem = NULL; m_pAtMem = NULL;
+                      m_InitialLocate = false; m_Located = false; }
     std::string     m_Name;           // Name of the segment
     std::string     m_MemRegion;      // Name of the memory the section is in
     std::string     m_MemAtRegion;    // Name of the memory the section is loaded to
     CMemory        *m_pMem;           // Pointer to the memory block
     CMemory        *m_pAtMem;         // Pointer to the AT memory block
+    bool            m_InitialLocate;
+    bool            m_Located;
     OperationList_t m_Ops;            // Link operations to perform
 };
 
@@ -179,6 +182,23 @@ typedef std::list<CSection *> SectionList_t;
 
 /// String to Memory map for saving label pointers
 typedef std::map<std::string, CMemory *> StrMemoryMap_t;
+
+typedef std::map<std::string, int> StrIntMap_t;
+typedef std::map<std::string, std::string>  StrStrmap_t;
+
+class CLibFile
+{
+    public:
+        CLibFile() {}
+
+        std::string     m_Path;
+        std::string     m_Name;
+
+        StrStrMap_t     m_Symbols;
+        StrIntMap_t     m_Members;
+};
+
+typedef std::list<CLibFile> LibFileList_t;
 
 /// Holds all parsed data from an image resource script
 class CParseCtx
@@ -192,6 +212,12 @@ public:
     
     /// Array of library paths
     StrList_t           m_LibPaths;
+
+    /// Array of Libraries
+    StrList_t           m_LibNames;
+
+    /// List of loaded libraries
+    LibFileList_t       m_Libs;
 
     /// Map of all known memory regions
     StrMemoryMap_t      m_MemoryMap;

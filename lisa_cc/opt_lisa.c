@@ -15,6 +15,7 @@ typedef void (*node_op_t)(Node *v, Node **vsource, int *changes,
 int gConvCount       = 0;
 int gConvPruned      = 0;
 int gTotalAstChanges = 0;
+extern char gOptimizationLevel;
 
 /*
 ======================================================================
@@ -238,6 +239,9 @@ static void PruneConvShortInt(Node *v, Node **vsource, int *changes, int parentA
   Node  *v2 = v->operand;
   Type  *ty = v->operand->ty;
   int   kind = v2->kind;
+
+  if (!parentAssignChar)
+     return;
 
   /* Test for struct reference */
   if (v2->kind == AST_STRUCT_REF)
@@ -764,6 +768,8 @@ static void OptimizeOperationSize(Node *v, Node **vsource, int *changes, int par
     case '|':
     case '>':
     case '<':
+    case OP_EQ:
+    case OP_NE:
     case OP_GE:
     case OP_LE:
     case OP_SAL:
@@ -1066,6 +1072,29 @@ static void OptimizeLiteralSizes(Node *v, Node **vsource, int *changes, int pare
     case '-':
     case '+':
       break;
+
+    case AST_LITERAL:
+      if (v->ty->kind != KIND_CHAR)
+      {
+        if (v->ty->usig)
+        {
+          /* Test if the literal can be made char */
+          if (v->ival >= 0 && v->ival <= 255)
+          {
+            v->ty->kind = KIND_CHAR;
+            v->ty->size = 1;
+            (*changes)++;
+          }
+        } else {
+          if (v->ival >= -128 && v->ival <= 127)
+          {
+            v->ty->kind = KIND_CHAR;
+            v->ty->size = 1;
+            (*changes)++;
+          }
+        }
+      }
+      return;
 
     default:
       return;
@@ -1449,7 +1478,7 @@ static void OptimizeAssociatveArgs(Node *v, Node **vsource, int *changes, int pa
     return;
 
   left = v->left;
-  right = v->left;
+  right = v->right;
   if (left->kind == AST_LITERAL ||
       ((left->kind == AST_LVAR || left->kind == AST_GVAR) &&
       !(right->kind == AST_LVAR || right->kind == AST_GVAR)) ||
@@ -1461,6 +1490,9 @@ static void OptimizeAssociatveArgs(Node *v, Node **vsource, int *changes, int pa
         !((right->kind == AST_LVAR || right->kind == AST_GVAR) &&
           (left->kind == AST_LVAR || left->kind == AST_GVAR)))
     {
+      if (v->argsSwapped)
+        return;
+
       // Switch left and right nodes
       v->left = v->right;
       v->right = left;
@@ -1475,10 +1507,436 @@ static void OptimizeAssociatveArgs(Node *v, Node **vsource, int *changes, int pa
       else if (v->kind == OP_GE)
         v->kind = OP_LE;
 
+      v->argsSwapped = 1;
       (*changes)++;
     }
   }
 }
+
+typedef struct NodeList_s
+{
+   struct NodeList_s  *pNext;
+   Node  *pV;
+   Node  **vsource;    // Source pointer to allow node replacement
+} NodeList;
+
+typedef struct nodeExpr
+{
+   struct nodeExpr *pNext;
+   struct nodeExpr *pPrev;
+   int             kind;
+   char            *pVar1;
+   char            *pVar2;
+   char            *pNewVar;
+   int             count;
+   int             assignCreated;
+   int             line;
+   NodeList        *pNodes;
+} nodeExpr_t;
+
+nodeExpr_t  *gpBlockExpr = NULL;
+int         gVirtReg = 0;
+Node        *gActiveNode;
+Node        **gActiveNodeSource;
+nodeExpr_t  *gpCurrExpr = NULL;
+
+
+/*
+======================================================================
+Add tail nodeExpr
+======================================================================
+*/
+void AddTailNodeExpr(Node *v, Node**vsource)
+{
+  nodeExpr_t   *pNodeExpr;
+  char         numStr[64];
+
+  pNodeExpr = (nodeExpr_t *) malloc(sizeof(*pNodeExpr));
+  pNodeExpr->pNext = NULL;
+  pNodeExpr->pPrev = NULL;
+  pNodeExpr->pNewVar = NULL;
+  pNodeExpr->assignCreated = 0;
+  pNodeExpr->kind  = v->kind;
+  pNodeExpr->line = v->sourceLoc->line;
+
+  // Handle left operand
+  switch (v->left->kind) {
+    case AST_LVAR:
+    case AST_GVAR:
+      pNodeExpr->pVar1 = strdup(v->left->varname);
+      break;
+    case AST_LITERAL:
+      // Format literal based on type
+      if (v->left->ty->kind == KIND_INT || v->left->ty->kind == KIND_CHAR || 
+          v->left->ty->kind == KIND_LONG) {
+        sprintf(numStr, "%ld", v->left->ival);
+      } else if (v->left->ty->kind == KIND_FLOAT || v->left->ty->kind == KIND_DOUBLE) {
+        sprintf(numStr, "%f", v->left->fval);
+      } else {
+        // Default for other types
+        sprintf(numStr, "%ld", v->left->ival);
+      }
+      pNodeExpr->pVar1 = strdup(numStr);
+      break;
+    default:
+      pNodeExpr->pVar1 = strdup("");
+      break;
+  }
+
+  // Handle right operand
+  if (v->right) {
+    switch (v->right->kind) {
+      case AST_LVAR:
+      case AST_GVAR:
+        pNodeExpr->pVar2 = strdup(v->right->varname);
+        break;
+      case AST_LITERAL:
+        // Format literal based on type
+        if (v->right->ty->kind == KIND_INT || v->right->ty->kind == KIND_CHAR || 
+            v->right->ty->kind == KIND_LONG) {
+          sprintf(numStr, "%ld", v->right->ival);
+        } else if (v->right->ty->kind == KIND_FLOAT || v->right->ty->kind == KIND_DOUBLE) {
+          sprintf(numStr, "%f", v->right->fval);
+        } else {
+          // Default for other types
+          sprintf(numStr, "%ld", v->right->ival);
+        }
+        pNodeExpr->pVar2 = strdup(numStr);
+        break;
+      default:
+        pNodeExpr->pVar2 = strdup("");
+        break;
+    }
+  } else {
+    pNodeExpr->pVar2 = NULL;
+  }
+
+  pNodeExpr->pNodes = (NodeList *) malloc(sizeof(NodeList));
+  pNodeExpr->pNodes->pNext = NULL;
+  pNodeExpr->pNodes->pV = v;
+  pNodeExpr->pNodes->vsource = vsource;
+  pNodeExpr->count = 1;
+
+  if (gpBlockExpr == NULL) {
+    gpBlockExpr = pNodeExpr;
+    gpBlockExpr->pNext = pNodeExpr;
+    gpBlockExpr->pPrev = pNodeExpr;
+  } else {
+    gpBlockExpr->pPrev->pNext = pNodeExpr;
+    pNodeExpr->pNext = gpBlockExpr;
+    pNodeExpr->pPrev = gpBlockExpr->pPrev;
+    gpBlockExpr->pPrev = pNodeExpr;
+  }
+}
+
+/*
+======================================================================
+Add tail NodeList
+======================================================================
+*/
+void AddTailNodeList(nodeExpr_t *pNodeExpr, Node *v, Node **vsource)
+{
+  NodeList *pNext;
+  NodeList *pNew;
+
+  // Create new NodeList
+  pNew = (NodeList *) malloc(sizeof(*pNew));
+  pNew->pV = v;
+  pNew->vsource = vsource;  // Store the source pointer
+  pNew->pNext = NULL;
+
+  // Append to end of pNodeExpr
+  if (pNodeExpr->pNodes == NULL)
+    pNodeExpr->pNodes = pNew;
+  else
+  {
+    pNext = pNodeExpr->pNodes;
+    while (pNext->pNext != NULL)
+      pNext = pNext->pNext;
+
+    pNext->pNext = pNew;
+  }
+}
+
+/*
+======================================================================
+Find duplicate expressions
+======================================================================
+*/
+static void FindDuplicateExpressions(Node *v, Node **vsource, int *changes,
+            int parentAssignChar, Node* vNextSibling)
+{
+  nodeExpr_t   *pNodeExpr;
+  nodeExpr_t   *pNodeExpr2;
+
+  switch (v->kind)
+  {
+    case '=':
+      AddTailNodeExpr(v, vsource);
+      break;  
+
+    case '+':
+    case '*':
+    case '&':
+    case '|':
+    case '^':
+    case '-':
+    case '/':
+    {
+      Node *left = v->left;
+      Node *right = v->right;
+      int lk = left->kind;
+      int rk = right->kind;
+      bool isAssociative = (v->kind == '+' || v->kind == '*' || 
+                           v->kind == '&' || v->kind == '|' || 
+                           v->kind == '^');
+
+      // Test for a simple expression
+      if ((lk == AST_LVAR || lk == AST_GVAR || lk == AST_LITERAL) &&
+         (rk == AST_LVAR || rk == AST_GVAR || rk == AST_LITERAL))
+      {
+        // Search backward through the linked list for this expression match
+        if (gpBlockExpr != NULL)
+        {
+           pNodeExpr = gpBlockExpr->pPrev;
+           pNodeExpr2 = pNodeExpr;
+           do 
+           {
+              // Test if node type matches
+              if (pNodeExpr->kind == v->kind)
+              {
+                 char leftStr[64], rightStr[64];
+                 
+                 // Convert left operand to string
+                 if (left->kind == AST_LITERAL) {
+                   if (left->ty->kind == KIND_INT || left->ty->kind == KIND_CHAR || 
+                       left->ty->kind == KIND_LONG) {
+                     sprintf(leftStr, "%ld", left->ival);
+                   } else if (left->ty->kind == KIND_FLOAT || left->ty->kind == KIND_DOUBLE) {
+                     sprintf(leftStr, "%f", left->fval);
+                   } else {
+                     sprintf(leftStr, "%ld", left->ival);
+                   }
+                 } else if (left->kind == AST_LVAR || left->kind == AST_GVAR) {
+                   strcpy(leftStr, left->varname);
+                 }
+
+                 // Convert right operand to string
+                 if (right->kind == AST_LITERAL) {
+                   if (right->ty->kind == KIND_INT || right->ty->kind == KIND_CHAR || 
+                       right->ty->kind == KIND_LONG) {
+                     sprintf(rightStr, "%ld", right->ival);
+                   } else if (right->ty->kind == KIND_FLOAT || right->ty->kind == KIND_DOUBLE) {
+                     sprintf(rightStr, "%f", right->fval);
+                   } else {
+                     sprintf(rightStr, "%ld", right->ival);
+                   }
+                 } else if (right->kind == AST_LVAR || right->kind == AST_GVAR) {
+                   strcpy(rightStr, right->varname);
+                 }
+
+                 // Test for matching expression
+                 if ((strcmp(leftStr, pNodeExpr->pVar1) == 0 && strcmp(rightStr, pNodeExpr->pVar2) == 0) ||
+                     (isAssociative && strcmp(leftStr, pNodeExpr->pVar2) == 0 && strcmp(rightStr, pNodeExpr->pVar1) == 0))
+                 {
+                    // This expression matches existing expression.  Increment
+                    // the count
+                    pNodeExpr->count++;
+                    AddTailNodeList(pNodeExpr, v, vsource);  // Pass vsource
+                    (*changes)++;
+                    return;
+                 }
+              }
+              else if (pNodeExpr->kind == '=')
+              {
+                 char numStr[64];
+                 // Format literal value if right is a literal
+                 if (right->kind == AST_LITERAL) {
+                   if (right->ty->kind == KIND_INT || right->ty->kind == KIND_CHAR || 
+                       right->ty->kind == KIND_LONG) {
+                     sprintf(numStr, "%ld", right->ival);
+                   } else if (right->ty->kind == KIND_FLOAT || right->ty->kind == KIND_DOUBLE) {
+                     sprintf(numStr, "%f", right->fval);
+                   } else {
+                     sprintf(numStr, "%ld", right->ival);
+                   }
+                 }
+
+                 // Test for assignment to either left or right var
+                 if ((left->kind == AST_LVAR || left->kind == AST_GVAR) &&
+                     strcmp(left->varname, pNodeExpr->pVar1) == 0)
+                 {
+                    // Start a new expression
+                    AddTailNodeExpr(v, vsource);
+                    return;
+                 }
+                 else if (right->kind != AST_LITERAL && 
+                         (right->kind == AST_LVAR || right->kind == AST_GVAR) &&
+                         strcmp(right->varname, pNodeExpr->pVar1) == 0)
+                 {
+                    // Start a new expression
+                    AddTailNodeExpr(v, vsource);
+                    return;
+                 }
+                 else if (right->kind == AST_LITERAL && 
+                         strcmp(pNodeExpr->pVar2, numStr) == 0)
+                 {
+                    // Start a new expression
+                    AddTailNodeExpr(v, vsource);
+                    return;
+                 }
+              }
+
+              // Get next previous node
+              pNodeExpr = pNodeExpr->pPrev;
+           } while (pNodeExpr != pNodeExpr2);
+
+           // Start a new expression
+           AddTailNodeExpr(v, vsource);
+        }
+      }
+      break;
+    }
+  }
+}
+
+/*
+======================================================================
+Find duplicate expressions
+======================================================================
+*/
+static void AddCombinedAssign(Node *v, Node **vsource, int *changes,
+            int parentAssignChar, Node* vNextSibling)
+{
+  // Test if we already performed the assignment
+  if (gpCurrExpr == NULL)
+    return;
+
+  // Test if this node is the first of the gpCurrExpr
+  if (v == gpCurrExpr->pNodes->pV)
+  {
+    // We found the first node.  Insert the assignment before the
+    // gActiveNode
+    Vector *list = make_vector();
+
+    // Add assign node to vector
+    Node *r = make_ast(&(Node){ '=', copy_type(v->ty) });
+    r->left = ast_lvar(v->ty, gpCurrExpr->pNewVar);
+    r->right = v;
+    vec_push(list, r);
+
+    // Add gActiveNode as the 2nd statement in the COMPOUND_STMT
+    vec_push(list, gActiveNode);
+
+    // Create a compound expression
+    *gActiveNodeSource = ast_compound_stmt(list);
+    gpCurrExpr = NULL;
+
+    (*changes)++;
+  }
+
+  // Keep track of active node for AST_IF and AST_ASSIGN (=)
+  else if (v->kind == AST_IF || v->kind == '=')
+  {
+    gActiveNode = v;
+    gActiveNodeSource = vsource;
+  }
+}
+
+/*
+======================================================================
+Combine duplicate expressions
+======================================================================
+*/
+static int CombineDuplicates(Node *v)
+{
+  nodeExpr_t *pNodeExpr;
+  char       varName[256];
+  int        changes = 0;
+  int        totalChanges = 0;
+
+  // Top level should be AST_FUNC
+  if (v->kind != AST_FUNC)
+    return 0;
+
+  // Body of FUNC is Compound statement
+  if (v->body->kind != AST_COMPOUND_STMT)
+    return 0;
+
+  // First add virtual registers to top level COMPOUND_STMT
+  pNodeExpr = gpBlockExpr;
+  if (pNodeExpr != NULL) {
+    do {
+      if (pNodeExpr->count > 1 && pNodeExpr->kind != '=')
+      {
+        sprintf(varName, "__vreg_%d_%d_%d", pNodeExpr->kind, pNodeExpr->count, gVirtReg++);
+        Node *var = ast_lvar(copy_type(pNodeExpr->pNodes->pV->ty), strdup(varName));
+        Node *r = ast_decl(var, NULL);
+        pNodeExpr->pNewVar = var->varname;
+        vec_push_head(v->body->stmts, r);
+      }
+
+      // Next node
+      pNodeExpr = pNodeExpr->pNext;
+    } while (pNodeExpr != gpBlockExpr);
+
+#if 0
+    pNodeExpr = gpBlockExpr;
+    do {
+      printf("%d: line=%d, count=%d var=%s, newVar=%s\n", pNodeExpr->line, pNodeExpr->kind, pNodeExpr->count,
+          pNodeExpr->pVar1, pNodeExpr->pNewVar ? pNodeExpr->pNewVar : "");
+      if (pNodeExpr->pNodes)
+        printf("%s  \n", node2s(pNodeExpr->pNodes->pV, 0));
+    
+      // Next node
+      pNodeExpr = pNodeExpr->pNext;
+    } while (pNodeExpr != gpBlockExpr);
+#endif
+
+    // Loop for each nodeExpr and add the assignment
+    pNodeExpr = gpBlockExpr;
+    do {
+      // Skip expressions that don't have duplicates
+      if (pNodeExpr->count > 1) {
+        gpCurrExpr = pNodeExpr;
+        IterateNodeSearch(v->body, NULL, &AddCombinedAssign, &changes, 0, NULL);
+        totalChanges += changes;
+      }
+
+      // Next node
+      pNodeExpr = pNodeExpr->pNext;
+    } while (pNodeExpr != gpBlockExpr);
+
+    // Now replace all subsequent uses with virtual register references
+    pNodeExpr = gpBlockExpr;
+    do {
+      if (pNodeExpr->count > 1 && pNodeExpr->kind != '=' && pNodeExpr->pNewVar != NULL)
+      {
+        NodeList *pList = pNodeExpr->pNodes;
+        // Replace ALL nodes including the first one since we already created
+        // the assignment node in the earlier loop
+        while (pList != NULL) {
+          // Create new AST_LVAR node for the virtual register
+          Node *vregNode = ast_lvar(pList->pV->ty, pNodeExpr->pNewVar);
+          
+          // Replace the original node with the virtual register reference
+          *(pList->vsource) = vregNode;
+          
+          pList = pList->pNext;
+          totalChanges++;
+        }
+      }
+      pNodeExpr = pNodeExpr->pNext;
+    } while (pNodeExpr != gpBlockExpr);
+  }
+
+  // Clear the block expression list before moving to next function
+  // but keep gVirtReg incrementing across all functions
+  gpBlockExpr = NULL;
+
+  return totalChanges;
+}
+
 /*
 ======================================================================
 Run an optimization over all nodes by iterating the optimization 
@@ -1508,6 +1966,9 @@ static int RunOptimization(Vector *toplevels, node_op_t pFunc)
          else
            sibling = NULL;
          IterateNodeSearch(v, NULL, pFunc, &changes, 0, sibling);
+
+         if (pFunc == FindDuplicateExpressions)
+           changes += CombineDuplicates(v);
        }
 
      /* Keep track of the number of changes we make to the AST tree */
@@ -1528,6 +1989,9 @@ void LisaOptimizeAST(Vector *toplevels)
 {
   int changes;
   int totalChanges = 0;
+
+  if (gOptimizationLevel == '0')
+    return;
 
   /* Optimize global variable order */
   OptimizeGlobalVarOrder(toplevels);
@@ -1587,9 +2051,14 @@ void LisaOptimizeAST(Vector *toplevels)
     /* Prune assign followed by return */
     changes += RunOptimization(toplevels, &PruneAssignReturn);
  
+    /* Combine duplicate expressions into single expression to virtual reg */
+    changes = RunOptimization(toplevels, &FindDuplicateExpressions);
+
     totalChanges += changes;
   } while (changes > 0);
 
 //  printf("Parsed %d AST_CONV nodes\n", gConvCount);
 //  printf("Pruned %d AST_* nodes\n", totalChanges);
 }
+
+// vim: et sw=2 ts=2

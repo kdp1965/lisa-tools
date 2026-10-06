@@ -25,11 +25,14 @@
 # SUCH DAMAGE.
 # ------------------------------------------------------------------------------
 
-TOOLS = lisa_as/lisa_as lisa_ld/lisa_ld lisa_cc/lisa_cc
+TOOLS = lisa_as/lisa_as lisa_as/lisa_ar lisa_ld/lisa_ld lisa_cc/lisa_cc lisa_ide/lisa_ide
 all: $(TOOLS)
 
 lisa_as/lisa_as:
 	$(MAKE) -C lisa_as
+
+lisa_as/lisa_ar:
+	$(MAKE) -C lisa_ar
 
 lisa_ld/lisa_ld:
 	$(MAKE) -C lisa_ld
@@ -37,10 +40,14 @@ lisa_ld/lisa_ld:
 lisa_cc/lisa_cc:
 	$(MAKE) -C lisa_cc
 
+lisa_ide/lisa_ide:
+	$(MAKE) -C lisa_ide
+
 clean:
 	@$(MAKE) -C lisa_as clean
 	@$(MAKE) -C lisa_ld clean
 	@$(MAKE) -C lisa_cc clean
+	@$(MAKE) -C lisa_ide clean
 
 install:
 	cp $(TOOLS) /usr/local/bin

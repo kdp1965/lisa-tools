@@ -1,0 +1,17 @@
+# build products of the hand-written toolchain
+obj/
+.dep/
+*.o
+*.rel
+*.lst
+*.map
+*.a
+*.linux-x86_64
+lisa_as/lisa_as
+lisa_as/lib/out/
+lisa_ar/lisa_ar
+lisa_cc/lisa_cc
+lisa_ld/lisa_ld
+lisa_bringup/bringup
+lisa_bringup/bringup.S
+lisa_bringup/bringup.ast

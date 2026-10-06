@@ -183,16 +183,19 @@ static Map *env() {
     return localenv ? localenv : globalenv;
 }
 
-static Type *copy_type(Type *ty) {
+Type *copy_type(Type *ty) {
     Type *r = malloc(sizeof(Type));
     memcpy(r, ty, sizeof(Type));
     return r;
 }
 
-static Node *make_ast(Node *tmpl) {
+Node *make_ast(Node *tmpl) {
     Node *r = malloc(sizeof(Node));
     *r = *tmpl;
     r->sourceLoc = source_loc;
+    r->virtRegOffset = 0;
+    r->hasVirtReg = 0;
+    r->argsSwapped = 0;
     return r;
 }
 
@@ -215,7 +218,7 @@ static Node *ast_floattype(Type *ty, double val) {
     return make_ast(&(Node){ AST_LITERAL, copy_type(ty), .fval = val });
 }
 
-static Node *ast_lvar(Type *ty, char *name) {
+Node *ast_lvar(Type *ty, char *name) {
     Node *r = make_ast(&(Node){ AST_LVAR, copy_type(ty), .varname = name });
     if (localenv)
         map_put(localenv, name, r);
@@ -307,7 +310,7 @@ static Node *ast_func(Type *ty, char *fname, Vector *params, Node *body, Vector 
         .body = body});
 }
 
-static Node *ast_decl(Node *var, Vector *init) {
+Node *ast_decl(Node *var, Vector *init) {
     return make_ast(&(Node){ AST_DECL, .declvar = var, .declinit = init });
 }
 
@@ -336,7 +339,7 @@ static Node *ast_return(Node *retval) {
     return make_ast(&(Node){ AST_RETURN, .retval = retval });
 }
 
-static Node *ast_compound_stmt(Vector *stmts) {
+Node *ast_compound_stmt(Vector *stmts) {
     return make_ast(&(Node){ AST_COMPOUND_STMT, .stmts = stmts });
 }
 

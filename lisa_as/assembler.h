@@ -48,6 +48,7 @@ class CAssembler
 
         bool                m_Mixed;
         int                 m_Width;
+        bool                m_ChipTT07;
 
     private:
         // Define private member functions

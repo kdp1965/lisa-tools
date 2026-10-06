@@ -25,6 +25,7 @@
 #include <string>
 #include <map>
 #include <list>
+#include <vector>
 
 #define     OPCODE_NOP      0x281C
 #define     OPCODE_NOTZ     0x281D
@@ -324,6 +325,8 @@ typedef struct ResourceSection
 /// Map's section names to the section data
 typedef std::map<std::string, ResourceSection_t *> StrSectionMap_t;
 
+typedef std::vector<std::string> StrVector_t;
+
 /// Maps Section names to the Locate address
 typedef std::map<std::string, uint32_t> StrAddressMap_t;
 
@@ -336,6 +339,7 @@ public:
 
     /// Map of all sections in the specification
     StrSectionMap_t     m_Segments;
+    StrVector_t         m_SegOrder;
 
     /// Map of all locates in the specification
     StrVarMap_t         m_Locates;
@@ -371,6 +375,7 @@ public:
     uint8_t             m_FillChar;
 
     std::string         m_Filename;
+    std::string         m_Filepath;
     std::string         m_ModuleName;
 };
 

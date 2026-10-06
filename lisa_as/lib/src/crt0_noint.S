@@ -16,31 +16,10 @@ asmsyntax=lisa
     .extern     _bss_end
     .extern     _virt_regs
     .extern     data_sram_origin
-    .public     reset_vec
+    .public     reset_vec_noint
     .extern     porta_isr
     // The reset vector
-reset_vec:
-    br      _init
-
-    // ==============================================================
-    // Interrupt vectors
-    // ==============================================================
-
-irq_timer1:
-    rets
-irq_timer2:
-    rets
-irq_uart1:
-    rets
-irq_uart2:
-    rets
-irq_porta_in:
-    jal     porta_isr
-irq_ttlc:
-    rets
-irq_i2c:
-    rets
-
+reset_vec_noint:
     // ==============================================================
     // Initialize the .data section (initialized C globals, etc.)
     // ==============================================================
@@ -82,13 +61,6 @@ _bss_loop:
 _init_stack:
     ldx     _stack_start
     xchg    sp
-    ldx     _stack_end
-    ldi     0xa5            // Prepare to fill stack with 0xA5
-_stack_loop:
-    stax    0(ix)           // Zero
-    adx     1               // Add 1 to IX
-    cpx     sp              // Test if at end of stack
-    bnz     _stack_loop     // Loop until done
     ads     -1              // Point to first byte of top of stack
 
     ldx     _virt_regs      // Point to virtual register space

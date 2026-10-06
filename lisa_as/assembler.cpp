@@ -48,6 +48,7 @@ CAssembler::CAssembler()
     m_pData = NULL;
     m_pTempData = NULL;
     m_Mixed = false;
+    m_ChipTT07 = false;
 }
 
 // =============================================================================
@@ -84,6 +85,8 @@ int32_t CAssembler::PerformCodeAssembly(ResourceSection_t* pSection, CResource* 
     uint32_t                op1;
     int                     argc;
     uint16_t                op_reti;
+    int fpos;
+    int count;
 
     if (m_Width == 16)
         op_reti = OPCODE16_RETI;
@@ -397,30 +400,63 @@ int32_t CAssembler::PerformCodeAssembly(ResourceSection_t* pSection, CResource* 
             it = pInst->args.begin();
 
             // Evaluate all arguments
+            count = 0;
+            fpos  = -1;
             while (it != pInst->args.end())
             {
+
                 // Test for quoted string
                 if ((*it).c_str()[0] == '"')
                 {
                     pStr = &(*it).c_str()[1];
-                    fprintf(m_pOutFile, "# DB %s\n", (*it).c_str());
+                    if (fpos == -1)
+                    {
+                        fprintf(m_pOutFile, "# DB %s  Count:", (*it).c_str());
+                        fpos = ftell(m_pOutFile);
+                        fprintf(m_pOutFile, "        \n");
+                    }
                     while (*pStr && *pStr != '"')
                     {
+                        const char *pOp = m_ChipTT07 ? "ldi" : "reti";
+                        int op = m_ChipTT07 ? 0x8000 : op_reti;
                         // Test for escape sequences \r \t \n
                         if (*pStr == '\\')
                         {
+                            int hexVal = 0;
                             pStr++;
                             if (*pStr == 't')
-                                fprintf(m_pOutFile, "i 0x%04X  # reti \\%c\n", op_reti | 0x9, *pStr);
-                            if (*pStr == 'n')
-                                fprintf(m_pOutFile, "i 0x%04X  # reti \\%c\n", op_reti | 0xA, *pStr);
-                            if (*pStr == 'r')
-                                fprintf(m_pOutFile, "i 0x%04X  # reti \\%c\n", op_reti | 0xD, *pStr);
+                                fprintf(m_pOutFile, "i 0x%04X  # %s \\%c\n", op | 0x9, pOp, *pStr);
+                            else if (*pStr == 'n')
+                                fprintf(m_pOutFile, "i 0x%04X  # %s \\%c\n", op | 0xA, pOp, *pStr);
+                            else if (*pStr == 'r')
+                                fprintf(m_pOutFile, "i 0x%04X  # %s \\%c\n", op | 0xD, pOp, *pStr);
+                            else if (*pStr == 'x')
+                            {
+                                // 2-digit HEX value
+                                pStr++;
+                                uint8_t ch = *pStr;
+                                hexVal = isxdigit(ch) ? (ch >= 'a' ? ch-'a'+10 : ch >= 'A' ? ch-'A'+10 : ch-'0') << 4 : 0;
+                                uint8_t ch2 = ch;
+                                ch = *(pStr + 1);
+                                hexVal += isxdigit(ch) ? (ch >= 'a' ? ch-'a'+10 : ch >= 'A' ? ch-'A'+10 : ch-'0') : 0;
+                                fprintf(m_pOutFile, "i 0x%04X  # %s \\x%c%c\n", op | hexVal, pOp, ch2, ch);
+
+                                pStr++;
+                            }
+                            else
+                                fprintf(m_pOutFile, "i 0x%04X  # %s %c\n", op | *pStr, pOp, *pStr);
                         }
                         else
-                            fprintf(m_pOutFile, "i 0x%04X  # reti %c\n", op_reti | *pStr, *pStr);
+                            fprintf(m_pOutFile, "i 0x%04X  # %s %c\n", op | *pStr, pOp, *pStr);
+                        count++;
                         pStr++;
                         pSection->address++;
+                        if (m_ChipTT07)
+                        {
+                            fprintf(m_pOutFile, "i 0x8A00  # ret\n");
+                            count++;
+                            pSection->address++;
+                        }
                     }
                 }
                 else
@@ -435,13 +471,33 @@ int32_t CAssembler::PerformCodeAssembly(ResourceSection_t* pSection, CResource* 
                         break;
                     }
 
+                    if (fpos == -1)
+                    {
+                        fprintf(m_pOutFile, "# DB 0x%0x  Count:", arg[0]);
+                        fpos = ftell(m_pOutFile);
+                        fprintf(m_pOutFile, "        \n");
+                    }
                     // Add the argument as an RETI + value
-                    fprintf(m_pOutFile, "i 0x%04X  # reti %s\n", op_reti | arg[0], (*it).c_str());
-                    pSection->address++;
+                    if (m_ChipTT07)
+                    {
+                        fprintf(m_pOutFile, "i 0x%04X  # ldi %s\n", 0x8000 | arg[0], (*it).c_str());
+                        fprintf(m_pOutFile, "i 0x8A00  # ret\n");
+                        count += 2;
+                        pSection->address += 2;
+                    }
+                    else
+                    {
+                        fprintf(m_pOutFile, "i 0x%04X  # reti %s\n", op_reti | arg[0], (*it).c_str());
+                        count++;
+                        pSection->address++;
+                    }
                 }
 
                 it++;
             }
+            fseek(m_pOutFile, fpos, SEEK_SET);
+            fprintf(m_pOutFile, "%d", count);
+            fseek(m_pOutFile, 0, SEEK_END);
             break;
             
         case TYPE_DW:
@@ -487,12 +543,13 @@ int32_t CAssembler::ReadAllSectionFiles(void)
     int32_t                     ret = ERROR_NONE;
     int32_t                     err;
     uint32_t                    value;
-    StrSectionMap_t::iterator   it = m_pSpec->m_Segments.begin();
     StrVarMap_t::iterator       locateIter;
 
     // Loop through all sections
-    for (; it != m_pSpec->m_Segments.end(); ++it)
+    for (auto sit : m_pSpec->m_SegOrder)
     {
+        auto it = m_pSpec->m_Segments.find(sit);
+
         // Get the sectionName and ResourceSection_t from the map
         string sectionName = it->first;
         ResourceSection_t* pSection = it->second;
@@ -539,11 +596,12 @@ int32_t CAssembler::PopulateAllDataBlocks(void)
 {
     int32_t                     ret = ERROR_NONE;
     int32_t                     err = ERROR_NONE;
-    StrSectionMap_t::iterator   it = m_pSpec->m_Segments.begin();
 
     // Loop through all sections
-    for (; it != m_pSpec->m_Segments.end(); ++it)
+    for (auto sit : m_pSpec->m_SegOrder)
     {
+        auto it = m_pSpec->m_Segments.find(sit);
+
         // Get the sectionName and ResourceSection_t from the map
         string sectionName = it->first;
         ResourceSection_t* pSection = it->second;
@@ -964,11 +1022,12 @@ int32_t CAssembler::AssembleLabels(void)
     int                         err;
     StrLabelMap_t::iterator     labelIt;
     StrList_t::iterator         sit;
-    StrSectionMap_t::iterator   it = m_pSpec->m_Segments.begin();
 
     // Loop through all sections
-    for (; it != m_pSpec->m_Segments.end(); ++it)
+    for (auto oit : m_pSpec->m_SegOrder)
     {
+        auto it = m_pSpec->m_Segments.find(oit);
+
         // Get the sectionName and ResourceSection_t from the map
         string sectionName = it->first;
         ResourceSection_t* pSection = it->second;
@@ -1060,10 +1119,16 @@ int32_t CAssembler::AssembleLabels(void)
                                     if ((*sit)[c] == '\\')
                                         c++;
                                     pSection->address++;
+                                    if (m_ChipTT07)
+                                        pSection->address++;
                                 }
                             }
                             else
+                            {
                                 pSection->address++;
+                                if (m_ChipTT07)
+                                    pSection->address++;
+                            }
 
                             // Advance to next arg
                             sit++;
@@ -1108,7 +1173,7 @@ int32_t CAssembler::CreateOutputBuffer(void)
     {
         printf("%s: Unable to allocate memory\n", m_pSpec->m_Filename.c_str());
         return ERROR_OUT_OF_MEMORY;
-    }
+    } 
 
     // Now fill the buffer with the Fill Char
     for (c = 0; c < m_pSpec->m_FileSize; c++)
@@ -1140,6 +1205,10 @@ int32_t CAssembler::CreateOutputFile(const char *filename)
     if (pExt)
         *pExt = 0;
     m_pSpec->m_ModuleName = pStr; 
+
+    // Put the source path in the file
+    if (m_pSpec->m_Filepath.size() > 0)
+        fprintf(m_pOutFile, "f %s\n", m_pSpec->m_Filepath.c_str());
 
     return ERROR_NONE;
 }
@@ -1308,12 +1377,13 @@ int32_t CAssembler::TestOverlappingSections(void)
     int32_t                     ret = ERROR_NONE;
     int32_t                     err;
     uint32_t                    value;
-    StrSectionMap_t::iterator   it = m_pSpec->m_Segments.begin();
     std::string                 s1, s2;
 
     // Iterate through all sections
-    for (; it != m_pSpec->m_Segments.end(); ++it)
+    for (auto sit : m_pSpec->m_SegOrder)
     {
+        auto it = m_pSpec->m_Segments.find(sit);
+
         StrSectionMap_t::iterator it2 = m_pSpec->m_Segments.begin();
         ResourceSection_t* pSection1 = it->second;
         s1 = it->first;
