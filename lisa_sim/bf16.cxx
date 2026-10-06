@@ -166,12 +166,21 @@ static void classify_rtl(uint16_t op, bool &isInf, bool &isDN, bool &isZ, bool &
 }
 
 // fops.v fadd.  Significands are 11 bits {0, hidden, fraction, 2 guard
-// bits}.  Two things the silicon does that an IEEE adder would not: on a
+// bits}.  Two things this RTL does that an IEEE adder would not: on a
 // carry out of the sum, f_res is built at bits [7:0] while the result
 // reads the fraction from [8:2], so the fraction comes out shifted right
 // by one (1.25 + 1.25 = 2.25); and the rounding adds 1 at the guard
 // position unconditionally (round up when any dropped bit is set, where
 // the dropped bits are only the two guard bits).
+//
+// This is the committed RTL (every revision of fops.v gives the same
+// results in icarus).  The TT07 silicon agrees with it on 1.25 + 1.25
+// and on the rounding-overflow case, but not everywhere: in a random
+// batch of 49 additions it differed in 8 (one ulp, usually nearer the
+// true sum, and 1.25 + 1.25 style cases that came out right), at 50 MHz
+// and at 12.5 MHz alike - so the taped-out adder (pnl/tt_um_lisa.pnl.v)
+// is not quite this fadd.  Nothing in sdcc's library uses the hardware
+// adder (bf16_add is software), so the model stays the RTL.
 uint16_t BF16Unit::fadd_rtl(uint16_t a_in, uint16_t b_in, bool round_to_zero) {
     bool i1, d1, z1, s1, q1, i2, d2, z2, s2, q2;
     unsigned e1, e2;
