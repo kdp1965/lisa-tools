@@ -12,7 +12,7 @@ SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
-SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_bf16
+SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_bf16 test_bf16f
 # Probes of the TT07 interrupt hazards (built, not checked: they fail on the
 # chip and on the simulator's TT07 model, pass with --fixed-irq)
 PROBES    = test_aluprobe test_sltprobe test_irqhaz
@@ -29,6 +29,10 @@ all: $(TESTS:%=%.ihx)
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
 test_bigframe.ihx: test_bigframe.c harness.h
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+
+# the C type float on the bfloat16 unit
+test_bf16f.ihx: test_bf16f.c harness.h
+	$(SDCC) $(CFLAGS) --bf16-float -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's
 # interrupt semantics (see README-lisa.md "Interrupts on TT07")
