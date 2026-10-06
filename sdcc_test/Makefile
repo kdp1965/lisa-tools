@@ -12,9 +12,12 @@ SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
-SELFCHECK = test_core test_negate test_union test_varargs test_digits
-OUTPUT    = hello test_printf
-TESTS     = $(SELFCHECK) $(OUTPUT)
+SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs
+OUTPUT    = hello test_printf test_owl
+# Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
+# they are built but not checked.
+PROBES    = test_aluprobe test_sltprobe
+TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES)
 
 all: $(TESTS:%=%.ihx)
 

@@ -435,6 +435,7 @@ int LisaCore::step() {
         if (cond_ & 1) {
             zflag_ = (ix_ == ra_);
             cflag_ = (ix_ < ra_);
+            signed_inv_ = false;
         }
         pc_ = (pc_ + 1) & PC_MASK;
         cond_ = 0x02 | (cond_ >> 1);
@@ -446,6 +447,7 @@ int LisaCore::step() {
         if (cond_ & 1) {
             zflag_ = (ix_ == sp_);
             cflag_ = (ix_ < sp_);
+            signed_inv_ = false;
         }
         pc_ = (pc_ + 1) & PC_MASK;
         cond_ = 0x02 | (cond_ >> 1);
@@ -462,6 +464,7 @@ int LisaCore::step() {
         if (cond_ & 1) {
             a_ = imm8;
             cflag_ = false;
+            signed_inv_ = false;
             zflag_ = (a_ == 0);
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -471,8 +474,13 @@ int LisaCore::step() {
     }
 
     if (top6 == 0x24) {  // 100100 = ADC a, #imm8
+        // Per RTL (TT07 silicon): the operand imm8 + C is formed in 8 bits
+        // before the 9-bit add, so adc #0xff with C=1 adds 0 and loses its
+        // carry.  signed_inversion = a[7] XOR imm[7].
         if (cond_ & 1) {
-            uint16_t sum = (uint16_t)a_ + imm8 + (cflag_ ? 1 : 0);
+            uint8_t adder = (uint8_t)(imm8 + (cflag_ ? 1 : 0));
+            uint16_t sum = (uint16_t)a_ + adder;
+            signed_inv_ = ((a_ ^ imm8) >> 7) & 1;
             a_ = sum & 0xFF;
             cflag_ = (sum >> 8) & 1;
             zflag_ = (a_ == 0);
@@ -512,6 +520,7 @@ int LisaCore::step() {
             uint8_t result = val - 1;
             data_write(d_addr, result, false);
             cflag_ = (val == 0);     // Borrow: was 0, wraps to 0xFF
+            signed_inv_ = false;
             zflag_ = (result == 0);  // Z set when new value is 0 (RTL checks old d_i==0x01)
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -524,10 +533,19 @@ int LisaCore::step() {
         // Per RTL: cflag is always the unsigned borrow (a < imm).
         // signed_inversion = a[7] XOR imm[7] (sign-bit disagreement), captured
         // unconditionally; it's only applied at the `if` consumer when s=inst[5]=1.
+        // signed_valid is NOT set for cpi in the RTL: signed_inversion is
+        // cleared, so `if slt` after cpi is an unsigned compare.  With
+        // amode[1] set the carry comes from the 8-bit-truncated adder instead
+        // of the comparator (wrong for imm8 == 0).
         if (cond_ & 1) {
             zflag_ = (a_ == imm8);
-            cflag_ = (a_ < imm8);
-            signed_inv_ = ((a_ ^ imm8) >> 7) & 1;
+            if (amode_ & 2) {
+                uint8_t adder = (uint8_t)(~imm8 + 1);
+                cflag_ = !(((uint16_t)a_ + adder) >> 8);
+            } else {
+                cflag_ = (a_ < imm8);
+            }
+            signed_inv_ = false;
         }
         cond_ = 0x02 | (cond_ >> 1);
         inst_count_++;
@@ -578,9 +596,12 @@ int LisaCore::step() {
 
     // === ALU + Memory ops (top6 in 11xxxx range) ===
     if (top6 == 0x30) {  // 110000 = ADD a, [base+uimm9]
+        // Per RTL (TT07 silicon): add does NOT include the carry (acc_adder = d_i);
+        // only adc #imm and sub do.  signed_inversion = a[7] XOR mem[7].
         if (cond_ & 1) {
             uint8_t val = data_read(d_addr, false);
-            uint16_t sum = (uint16_t)a_ + val + (cflag_ ? 1 : 0);
+            uint16_t sum = (uint16_t)a_ + val;
+            signed_inv_ = ((a_ ^ val) >> 7) & 1;
             a_ = sum & 0xFF;
             cflag_ = (sum >> 8) & 1;
             zflag_ = (a_ == 0);
@@ -610,11 +631,16 @@ int LisaCore::step() {
     }
 
     if (top6 == 0x32) {  // 110010 = SUB a, [base+uimm9]
+        // Per RTL (TT07 silicon): acc_adder = ~(mem + C) + 1 in 8 bits, so a
+        // zero operand with C=0 adds 0 instead of 256: the result is right
+        // but a borrow is reported.  signed_inversion = a[7] XOR mem[7].
         if (cond_ & 1) {
             uint8_t val = data_read(d_addr, false);
-            uint16_t diff = (uint16_t)a_ - val - (cflag_ ? 1 : 0);
-            a_ = diff & 0xFF;
-            cflag_ = (diff >> 8) & 1;  // Borrow
+            uint8_t adder = (uint8_t)(~(uint8_t)(val + (cflag_ ? 1 : 0)) + 1);
+            uint16_t sum = (uint16_t)a_ + adder;
+            signed_inv_ = ((a_ ^ val) >> 7) & 1;
+            a_ = sum & 0xFF;
+            cflag_ = !((sum >> 8) & 1);  // Borrow = no carry out
             zflag_ = (a_ == 0);
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -676,6 +702,7 @@ int LisaCore::step() {
             uint8_t result = val + 1;
             data_write(d_addr, result, false);
             cflag_ = (val == 0xFF);     // Carry: was 0xFF, wraps to 0
+            signed_inv_ = false;
             zflag_ = (result == 0);     // Z set when new value is 0 (RTL checks old d_i==0xFF)
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -687,10 +714,13 @@ int LisaCore::step() {
     if (top6 == 0x3A) {  // 111010 = CMP a, [base+uimm9]
         // Per RTL: cflag = unsigned borrow (a < mem) regardless of amode[1].
         // signed_inversion = a[7] XOR mem[7].
+        // Per RTL (TT07 silicon): acc_adder = ~mem + 1 in 8 bits, so comparing
+        // against a zero byte reports a borrow (a < 0) for every a.
         if (cond_ & 1) {
             uint8_t val = data_read(d_addr, false);
+            uint8_t adder = (uint8_t)(~val + 1);
             zflag_ = (a_ == val);
-            cflag_ = (a_ < val);
+            cflag_ = !(((uint16_t)a_ + adder) >> 8);
             signed_inv_ = ((a_ ^ val) >> 7) & 1;
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -813,6 +843,7 @@ int LisaCore::step() {
                 bool old_msb = (a_ >> 7) & 1;
                 a_ = (a_ << 1) | ((amode_ & 1) ? (cflag_ ? 1 : 0) : 0);
                 cflag_ = old_msb;
+                signed_inv_ = false;
                 zflag_ = (a_ == 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -834,6 +865,7 @@ int LisaCore::step() {
                     fill = 0;  // Logical
                 a_ = (fill << 7) | (a_ >> 1);
                 cflag_ = old_lsb;
+                signed_inv_ = false;
                 zflag_ = (a_ == 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -887,6 +919,7 @@ int LisaCore::step() {
         if ((inst >> 3) == 0x1401) {
             if (cond_ & 1) {
                 cflag_ = inst & 1;
+                signed_inv_ = false;
             }
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;
