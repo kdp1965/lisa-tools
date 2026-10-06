@@ -26,11 +26,11 @@ void LisaMemory::inst_write(uint16_t addr, uint16_t data) {
 }
 
 uint8_t LisaMemory::data_read(uint16_t addr) const {
-    return data_[addr & (DATA_SIZE - 1)];
+    return data_[addr & data_mask_];
 }
 
 void LisaMemory::data_write(uint16_t addr, uint8_t data) {
-    data_[addr & (DATA_SIZE - 1)] = data;
+    data_[addr & data_mask_] = data;
 }
 
 bool LisaMemory::load_hex(const std::string& filename) {

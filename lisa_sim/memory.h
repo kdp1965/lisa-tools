@@ -46,10 +46,16 @@ public:
     // Get firmware size (number of 16-bit words loaded)
     size_t firmware_words() const { return fw_words_; }
 
+    // Limit the data RAM to a power-of-two size (the TT07 chip has 128
+    // bytes without the cache): addresses wrap, as they do on the chip
+    void set_data_size(size_t bytes) { data_mask_ = (uint16_t)(bytes - 1); }
+    size_t data_size() const { return (size_t)data_mask_ + 1; }
+
 private:
     uint16_t inst_[INST_SIZE];
     uint8_t  data_[DATA_SIZE];
     size_t   fw_words_;
+    uint16_t data_mask_ = DATA_SIZE - 1;
 };
 
 #endif

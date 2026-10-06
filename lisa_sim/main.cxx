@@ -16,6 +16,8 @@ static void usage(const char* prog) {
     printf("  -s N             Run for N steps then stop\n");
     printf("  -p PORT          Connect UART1 to host serial port\n");
     printf("     --port PORT\n");
+    printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
+    printf("                   without the cache; default 32768); addresses wrap\n");
 }
 
 int main(int argc, char** argv) {
@@ -24,6 +26,7 @@ int main(int argc, char** argv) {
     std::string firmware_file;
     bool auto_run = false;
     bool batch = false;
+    unsigned long ram_bytes = 0;
     bool trace = false;
     uint64_t max_cycles = 0;
     int max_steps = 0;
@@ -46,6 +49,12 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             max_steps = atoi(argv[++i]);
             auto_run = true;
+        } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
+            ram_bytes = strtoul(argv[++i], nullptr, 0);
+            if (ram_bytes < 2 || ram_bytes > 32768 || (ram_bytes & (ram_bytes - 1))) {
+                fprintf(stderr, "Error: -m needs a power of two from 2 to 32768\n");
+                return 1;
+            }
         } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
             serial_port = argv[++i];
         } else if (argv[i][0] != '-') {
@@ -59,6 +68,9 @@ int main(int argc, char** argv) {
 
     printf("LISA 8-bit Microcontroller Simulator v1.0\n");
     printf("=========================================\n");
+
+    if (ram_bytes)
+        sim.memory().set_data_size(ram_bytes);
 
     if (!firmware_file.empty()) {
         if (sim.load_firmware(firmware_file)) {
