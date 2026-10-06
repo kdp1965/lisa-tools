@@ -59,7 +59,11 @@ int main(void)
   got = work(300);              /* with interrupts landing anywhere in it */
   CHECK(1, got == expect);
   CHECK(2, ticks > 2);
-  CHECK(3, isr_sum == (unsigned int)(ticks * 0x0101u));
+  __critical {                  /* a tick between the two reads would split them */
+    t0 = ticks;
+    got = isr_sum;
+  }
+  CHECK(3, got == (unsigned int)(t0 * 0x0101u));
 
   __critical {                  /* no tick can land in here */
     t0 = ticks;

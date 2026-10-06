@@ -23,15 +23,19 @@ TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES)
 
 all: $(TESTS:%=%.ihx)
 
-%.ihx: %.c harness.h
+# a new compiler or library rebuilds everything (a stale .ihx once made
+# 15 suites "fail")
+DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib)
+
+%.ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $<
 
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
-test_bigframe.ihx: test_bigframe.c harness.h
+test_bigframe.ihx: test_bigframe.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # the C type float on the bfloat16 unit
-test_bf16f.ihx: test_bf16f.c harness.h
+test_bf16f.ihx: test_bf16f.c $(DEPS)
 	$(SDCC) $(CFLAGS) --bf16-float -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's
