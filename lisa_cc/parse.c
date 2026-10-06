@@ -323,10 +323,20 @@ static Node *ast_conv(Type *totype, Node *val) {
 }
 
 static Node *ast_if(Node *cond, Node *then, Node *els) {
+    return make_ast(&(Node){ AST_IF, .cond = cond, .then = then, .els = els });
+}
+
+/*
+ * The AST_IF of an if statement carries the location of the 'if' keyword,
+ * pushed by read_stmt() (loops and switch build AST_IF nodes too, and must
+ * not pop it: an underflow reads whatever sits below the stack as a SourceLoc).
+ */
+static Node *ast_if_stmt(Node *cond, Node *then, Node *els) {
     SourceLoc *source_loc_save = source_loc;
     Node *ret;
-    source_loc = if_source_loc_stack[--if_source_stack_idx];
-    ret = make_ast(&(Node){ AST_IF, .cond = cond, .then = then, .els = els });
+    if (if_source_stack_idx > 0)
+        source_loc = if_source_loc_stack[--if_source_stack_idx];
+    ret = ast_if(cond, then, els);
     source_loc = source_loc_save;
     return ret;
 }
@@ -2451,9 +2461,9 @@ static Node *read_if_stmt() {
     expect(')');
     Node *then = read_stmt();
     if (!next_token(KELSE))
-        return ast_if(cond, then, NULL);
+        return ast_if_stmt(cond, then, NULL);
     Node *els = read_stmt();
-    return ast_if(cond, then, els);
+    return ast_if_stmt(cond, then, els);
 }
 
 /*

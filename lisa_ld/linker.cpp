@@ -125,7 +125,8 @@ void CLinker::OpenLibraries()
             std::ifstream infile(libPath);
             if (infile.is_open())
             {
-                CLibFile&    libFile = m_pSpec->m_Libs.emplace_back();
+                m_pSpec->m_Libs.emplace_back();     // (emplace_back returns void before C++17)
+                CLibFile&    libFile = m_pSpec->m_Libs.back();
                 libFile.m_Path = libPath;
                 libFile.m_Name = lib;
 
@@ -576,7 +577,8 @@ int CLinker::ResolveLibCalls(int& LibSlicesAdded)
                             foundInLib = true;
                         }
                     }
-                    vit++;
+                    // (no vit++ here: vit is end() in this branch and
+                    //  incrementing it crashes libc++)
                 }
                 xit++;
             }

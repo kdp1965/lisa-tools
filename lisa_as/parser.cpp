@@ -19,6 +19,7 @@
 //
 // ------------------------------------------------------------------------------
 
+#include <fcntl.h>
 #include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2677,9 +2678,16 @@ int CParser::GetFilePath(FILE *fp, std::string &filePath)
     snprintf(procPath, sizeof(procPath), "/proc/self/fd/%d", fd);
 
     char resolvedPath[PATH_MAX];
+#ifdef __APPLE__
+    // macOS has no /proc: ask the descriptor for its path
+    if (fcntl(fd, F_GETPATH, resolvedPath) == -1)
+        return -3;
+    ssize_t len = strlen(resolvedPath);
+#else
     ssize_t len = readlink(procPath, resolvedPath, sizeof(resolvedPath) - 1);
     if (len < 0)
         return -3;
+#endif
 
     resolvedPath[len] = '\0';
     filePath = resolvedPath;

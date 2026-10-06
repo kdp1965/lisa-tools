@@ -19,6 +19,9 @@
 //
 // ------------------------------------------------------------------------------
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -165,7 +168,12 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+#ifdef __APPLE__
+    uint32_t pathSize = sizeof(path);
+    ssize_t count = _NSGetExecutablePath(path, &pathSize) == 0 ? (ssize_t)strlen(path) : -1;
+#else
     ssize_t count = readlink("/proc/self/exe", path, sizeof(path));
+#endif
     if (count != -1)
     {
         path[count] = '\0';
