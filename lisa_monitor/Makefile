@@ -14,7 +14,7 @@ TEST   ?= ../../tt07-um-lisa-ttlc/lisa-test/test
 
 all: monitor.ihx
 
-monitor.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib)
+monitor.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib)
 	$(SDCC) -mlisa --tt07-cache -o $@ $<
 
 board: monitor.ihx

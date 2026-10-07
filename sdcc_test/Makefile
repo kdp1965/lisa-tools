@@ -28,7 +28,7 @@ all: $(TESTS:%=%.ihx)
 
 # a new compiler or library rebuilds everything (a stale .ihx once made
 # 15 suites "fail")
-DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib)
+DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib)
 
 %.ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $<
