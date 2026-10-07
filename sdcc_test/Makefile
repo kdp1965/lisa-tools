@@ -41,9 +41,10 @@ test_bigframe.ihx: test_bigframe.c $(DEPS)
 test_bf16f.ihx: test_bf16f.c $(DEPS)
 	$(SDCC) $(CFLAGS) --bf16-float -o $@ $<
 
-# the cache tests use the whole 32K: stack at the top
+# the cache tests use the 32K data space as the TT07 cache folds it: stack
+# at the top, data below 0x3800 (the linker checks)
 test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx: %.ihx: %.c $(DEPS)
-	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+	$(SDCC) $(CFLAGS) --tt07-cache -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's
 # interrupt semantics (see README-lisa.md "Interrupts on TT07")
