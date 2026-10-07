@@ -27,6 +27,13 @@ static signed char usmod(unsigned char a, signed char b) { return a % b; }
 static unsigned char udiv(unsigned char a, unsigned char b) { return a / b; }
 static signed char sdiv7(signed char a) { return a / 7; }
 static signed char smod7(signed char a) { return a % 7; }
+/* a literal that fits a byte of the other signedness: the mixed helpers
+   (lisaNarrowByteDiv in SDCCopt.c) */
+static signed char sd200(signed char a) { return a / 200; }
+static signed char sm200(signed char a) { return a % 200; }
+static signed char udn3(unsigned char a) { return a / -3; }
+static signed char umn3(unsigned char a) { return a % -3; }
+static signed char udn1(unsigned char a) { return a / -1; }
 /* the quotient of two chars is an int: 128 and -255 happen */
 volatile signed char c128 = -128, cm1 = -1;
 volatile unsigned char u255 = 255;
@@ -60,6 +67,8 @@ int main(void)
   CHECK(25, usdiv(200, -4) == -50 && usmod(200, -4) == 0 && usdiv(255, -1) == 1 && usmod(255, -1) == 0 && usdiv(200, 3) == 66 && usmod(200, -3) == 2);
   CHECK(26, udiv(255, 1) == 255 && udiv(200, 7) == 28 && sdiv7(-100) == -14 && smod7(-100) == -2 && sdiv7(127) == 18 && smod7(-128) == -2);
   CHECK(27, c128 / cm1 == 128 && c128 % cm1 == 0 && u255 / cm1 == -255 && u255 % cm1 == 0 && cm1 / u255 == 0 && cm1 % u255 == -1);
+  CHECK(28, sd200(-100) == 0 && sm200(-100) == -100 && sd200(127) == 0 && sm200(127) == 127);
+  CHECK(29, udn3(200) == -66 && umn3(200) == 2 && udn3(255) == -85 && umn3(255) == 0 && udn1(255) == 1 && udn1(100) == -100);
   puts("lt16 "); puthex(lt16(-300, 200)); puthex(lt16(200, -300)); puthex(lt16(-300, -301)); putc('\n');
   puts("neg16 "); puthex(neg16(-1)); puthex(neg16(1)); putc('\n');
   puts("div "); puthex((unsigned)(g16 / 10)); puthex((unsigned)(g16 % 10)); putc('\n');
