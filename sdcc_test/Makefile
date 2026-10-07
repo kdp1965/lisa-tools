@@ -12,7 +12,7 @@ SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
-SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff
+SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot
 # Probes of the TT07 interrupt hazards (built, not checked: they fail on the
 # chip and on the simulator's TT07 model, pass with --fixed-irq)
 PROBES    = test_aluprobe test_sltprobe test_irqhaz
