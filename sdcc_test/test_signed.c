@@ -16,6 +16,21 @@ int g16 = -2461;
 /* __divsint / __modsint in divu.s */
 volatile int m16 = -32767 - 1, p16 = 300, n16 = -300, s7 = 7, s7n = -7, one = 1;
 
+/* the byte helpers in divu.s: a char result keeps the operands bytes, with
+   int's rules for a mixed pair (__divuschar: a signed, __divsuchar: b) */
+static signed char sdiv(signed char a, signed char b) { return a / b; }
+static signed char smod(signed char a, signed char b) { return a % b; }
+static signed char sudiv(signed char a, unsigned char b) { return a / b; }
+static signed char sumod(signed char a, unsigned char b) { return a % b; }
+static signed char usdiv(unsigned char a, signed char b) { return a / b; }
+static signed char usmod(unsigned char a, signed char b) { return a % b; }
+static unsigned char udiv(unsigned char a, unsigned char b) { return a / b; }
+static signed char sdiv7(signed char a) { return a / 7; }
+static signed char smod7(signed char a) { return a % 7; }
+/* the quotient of two chars is an int: 128 and -255 happen */
+volatile signed char c128 = -128, cm1 = -1;
+volatile unsigned char u255 = 255;
+
 int main(void)
 {
   CHECK(1, lt16(-300, 200) == 1);
@@ -38,6 +53,13 @@ int main(void)
   CHECK(18, n16 / s7n == 42 && n16 % s7n == -6 && p16 / s7n == -42 && p16 % s7n == 6);
   CHECK(19, one / m16 == 0 && one % m16 == 1 && n16 % s7 == -6 && n16 / s7 == -42);
   CHECK(20, 65535u / (unsigned)s7 == 9362 && 65535u % (unsigned)s7 == 1 && (unsigned)n16 / (unsigned)one == 65236u);
+  CHECK(21, sdiv(100, -4) == -25 && smod(100, -4) == 0 && sdiv(-100, 3) == -33 && smod(-100, 3) == -1);
+  CHECK(22, sdiv(-128, -1) == -128 && smod(-128, -1) == 0 && sdiv(-128, 1) == -128 && sdiv(127, -128) == 0 && smod(127, -128) == 127);
+  CHECK(23, sdiv(-128, 7) == -18 && smod(-128, 7) == -2 && sdiv(7, -128) == 0 && smod(-7, 100) == -7);
+  CHECK(24, sudiv(-100, 200) == 0 && sumod(-100, 200) == -100 && sudiv(-100, 3) == -33 && sumod(-100, 3) == -1 && sudiv(100, 200) == 0);
+  CHECK(25, usdiv(200, -4) == -50 && usmod(200, -4) == 0 && usdiv(255, -1) == 1 && usmod(255, -1) == 0 && usdiv(200, 3) == 66 && usmod(200, -3) == 2);
+  CHECK(26, udiv(255, 1) == 255 && udiv(200, 7) == 28 && sdiv7(-100) == -14 && smod7(-100) == -2 && sdiv7(127) == 18 && smod7(-128) == -2);
+  CHECK(27, c128 / cm1 == 128 && c128 % cm1 == 0 && u255 / cm1 == -255 && u255 % cm1 == 0 && cm1 / u255 == 0 && cm1 % u255 == -1);
   puts("lt16 "); puthex(lt16(-300, 200)); puthex(lt16(200, -300)); puthex(lt16(-300, -301)); putc('\n');
   puts("neg16 "); puthex(neg16(-1)); puthex(neg16(1)); putc('\n');
   puts("div "); puthex((unsigned)(g16 / 10)); puthex((unsigned)(g16 % 10)); putc('\n');
