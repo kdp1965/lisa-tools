@@ -12,7 +12,7 @@ SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa
 
-SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f
+SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff
 # Probes of the TT07 interrupt hazards (built, not checked: they fail on the
 # chip and on the simulator's TT07 model, pass with --fixed-irq)
 PROBES    = test_aluprobe test_sltprobe test_irqhaz
@@ -43,7 +43,7 @@ test_bf16f.ihx: test_bf16f.c $(DEPS)
 
 # the cache tests use the 32K data space as the TT07 cache folds it: stack
 # at the top, data below 0x3800 (the linker checks)
-test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx: %.ihx: %.c $(DEPS)
+test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx test_ptroff.ihx: %.ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) --tt07-cache -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's

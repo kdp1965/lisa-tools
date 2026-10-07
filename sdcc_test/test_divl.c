@@ -61,6 +61,7 @@ static unsigned long refdiv(unsigned long n, unsigned long d, unsigned long *rem
 
 volatile unsigned long va, vb;
 volatile long sa = -123456789L, sb = 1000L, sc = -7L, sd = 70000L;
+volatile long se = -2147483647L - 1, sf = 65536L, sg = -65536L, sh = 3L, sj = 2000000000L, sk = -70000L;
 
 int main(void)
 {
@@ -76,6 +77,13 @@ int main(void)
   CHECK(51, sa / sc == 17636684L && sa % sc == -1L);
   CHECK(52, sb / sc == -142L && sb % sc == 6L);
   CHECK(53, sd / sb == 70L && sd % sb == 0L && -sd / sb == -70L);
+  /* __divslong / __modslong in divul.s: LONG_MIN, divisors of 16 bits and more of both signs */
+  CHECK(55, se / sb == -2147483L && se % sb == -648L);
+  CHECK(56, se / sf == -32768L && se % sf == 0L && se / sh == -715827882L && se % sh == -2L);
+  CHECK(57, sa / sg == 1883L && sa % sg == -52501L);
+  CHECK(58, sj / sk == -28571L && sj % sk == 30000L);
+  CHECK(59, sc / sb == 0L && sc % sb == -7L && sb / sa == 0L && sb % sa == 1000L);
+  CHECK(60, se / sg == 32768L && se % sg == 0L && se / sb * sb + se % sb == se);
   /* an LCG stream, divisors of every size, against the bit-serial reference */
   for (i = 0; i < 200; i++) {
     unsigned long a, b, r, q;
