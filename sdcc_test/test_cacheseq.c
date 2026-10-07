@@ -20,8 +20,8 @@ int main(void)
   s = fillsum((unsigned char *)0x0200, 300); puthex(s); putc('\n'); CHECK(2, s == 0x8a96);
   s = fillsum((unsigned char *)0x4200, 64);  puthex(s); putc('\n'); CHECK(3, s == 6048);
   s = fillsum((unsigned char *)0x4200, 300); puthex(s); putc('\n'); CHECK(4, s == 0x8a96);
-  s = fillsum((unsigned char *)0x7c70, 300); puthex(s); putc('\n'); CHECK(5, s == 0x8a96);
-  s = fillsum((unsigned char *)0x7c70, 900); puthex(s); putc('\n'); CHECK(6, s == 0x1b5d2 % 65536);
+  s = fillsum((unsigned char *)0x7800, 300); puthex(s); putc('\n'); CHECK(5, s == 0x8a96);
+  s = fillsum((unsigned char *)0x7800, 900); puthex(s); putc('\n'); CHECK(6, s == 0x1b5d2 % 65536);   /* below the stack, which starts at 0x7fff */
   DONE();
   return 0;
 }
