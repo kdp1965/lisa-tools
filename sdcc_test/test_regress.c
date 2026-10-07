@@ -25,6 +25,8 @@ int sum_pair(unsigned char k, struct pair p) { return p.lo + p.hi + k; }
 struct bits { unsigned char a:3; unsigned char b:2; unsigned char c:3; };
 struct wide { unsigned int x:12; signed int y:4; };
 volatile struct bits vb;
+volatile long vl_m5 = -5, vl_7 = 7, vl_0 = 0; volatile int vi_m1234 = -1234; volatile signed char vc_m3 = -3;
+volatile unsigned long vu_9 = 9, vu_0 = 0;
 struct wide vw;
 
 /* 5. the shift count sharing a stack slot with the result */
@@ -116,6 +118,17 @@ int main(void)
     char buf[12];
     strcpy(buf, " a bb  ccc ");
     CHECK(21, words(buf) == 3 && words("") == 0);
+  }
+
+  /* compares as values, with the ! the compiler folds into them:
+     >= 0 and <= 0 of signed values, > 0 of unsigned, !(a == b) */
+  {
+    long l = vl_m5, lp = vl_7, lz = vl_0; int i = vi_m1234; signed char c = vc_m3; unsigned long u = vu_9, uz = vu_0;
+    unsigned char ge = (l >= 0), ge2 = (lp >= 0), ge3 = (lz >= 0), le = (lp <= 0), le2 = (l <= 0), le3 = (lz <= 0);
+    unsigned char ige = (i >= 0), cge = (c >= 0), ugt = (u > 0), ugt2 = (uz > 0), ule = (u <= 0), ule2 = (uz <= 0);
+    int ne = !(l == lp), ne2 = !(l == l);
+    CHECK(22, ge == 0 && ge2 == 1 && ge3 == 1 && le == 0 && le2 == 1 && le3 == 1);
+    CHECK(23, ige == 0 && cge == 0 && ugt == 1 && ugt2 == 0 && ule == 0 && ule2 == 1 && ne == 1 && ne2 == 0);
   }
 
   DONE();
