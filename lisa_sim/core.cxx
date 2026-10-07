@@ -822,9 +822,15 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x3B) {  // 111011 = SWAP a, [base+uimm9]
         // Per RTL: neither Z nor C is updated by swap.
+        // TT07 silicon (lisa_core.v sp_sum_op / sp_adder, seen on the chip
+        // through the data cache, 2026-10-06): the SP form takes its address
+        // from the ads adder, sp + sext({1, imm9}) = sp + imm9 - 512.  The
+        // 128-byte RAM hides it (the address is taken modulo its size), the
+        // 32K data space does not.  The IX form is right.
+        uint16_t swap_addr = base_sp ? (uint16_t)((sp_ + uimm9 - 512) & D_MASK) : d_addr;
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
-            data_write(d_addr, a_, false);
+            uint8_t val = data_read(swap_addr, false);
+            data_write(swap_addr, a_, false);
             a_ = val;
         }
         cond_ = 0x02 | (cond_ >> 1);

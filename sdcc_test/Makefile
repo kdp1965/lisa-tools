@@ -17,9 +17,12 @@ SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signe
 # chip and on the simulator's TT07 model, pass with --fixed-irq)
 PROBES    = test_aluprobe test_sltprobe test_irqhaz
 OUTPUT    = hello test_printf test_owl
+# The data cache on an RP2040 SPI RAM (hw_test.mjs spiram=): built, run on the
+# chip only; test_cacherm's expectations are the TT07 silicon's swap n(sp)
+CACHE     = test_cacherm test_cachewb test_cacheseq test_cacheloop
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
-TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES)
+TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES) $(CACHE)
 
 all: $(TESTS:%=%.ihx)
 
@@ -37,6 +40,10 @@ test_bigframe.ihx: test_bigframe.c $(DEPS)
 # the C type float on the bfloat16 unit
 test_bf16f.ihx: test_bf16f.c $(DEPS)
 	$(SDCC) $(CFLAGS) --bf16-float -o $@ $<
+
+# the cache tests use the whole 32K: stack at the top
+test_cacheseq.ihx test_cacheloop.ihx: %.ihx: %.c $(DEPS)
+	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's
 # interrupt semantics (see README-lisa.md "Interrupts on TT07")
