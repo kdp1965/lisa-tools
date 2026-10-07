@@ -1,8 +1,9 @@
 /* probe the silicon ALU flags.  Each line: name result carry */
 #include "harness.h"
 
-/* 16-bit return slot at 3(sp)/4(sp), a at 5(sp), b at 6(sp) (RA saved by the inline asm) */
-unsigned int add_c1(unsigned char a, unsigned char b)   /* ldc 1; a + b -> result | carry<<8 */
+/* 16-bit return slot at 3(sp)/4(sp), a at 5(sp), b at 6(sp) (RA saved by the inline asm;
+   __sdcccall(0): the first byte parameter would otherwise come in A) */
+unsigned int add_c1(unsigned char a, unsigned char b) __sdcccall(0)   /* ldc 1; a + b -> result | carry<<8 */
 { __asm
     ldax 5(sp)
     ldc #1
@@ -11,7 +12,7 @@ unsigned int add_c1(unsigned char a, unsigned char b)   /* ldc 1; a + b -> resul
     ldac c
     stax 4(sp)
 __endasm; }
-unsigned int sub_c0(unsigned char a, unsigned char b)   /* ldc 0; a - b */
+unsigned int sub_c0(unsigned char a, unsigned char b) __sdcccall(0)   /* ldc 0; a - b */
 { __asm
     ldax 5(sp)
     ldc #0
@@ -20,7 +21,7 @@ unsigned int sub_c0(unsigned char a, unsigned char b)   /* ldc 0; a - b */
     ldac c
     stax 4(sp)
 __endasm; }
-unsigned int sub_c1(unsigned char a, unsigned char b)   /* ldc 1; a - b - 1 */
+unsigned int sub_c1(unsigned char a, unsigned char b) __sdcccall(0)   /* ldc 1; a - b - 1 */
 { __asm
     ldax 5(sp)
     ldc #1
@@ -29,7 +30,7 @@ unsigned int sub_c1(unsigned char a, unsigned char b)   /* ldc 1; a - b - 1 */
     ldac c
     stax 4(sp)
 __endasm; }
-unsigned int adcff_c1(unsigned char a)                  /* ldc 1; adc #0xff */
+unsigned int adcff_c1(unsigned char a) __sdcccall(0)                  /* ldc 1; adc #0xff */
 { __asm
     ldax 5(sp)
     ldc #1
@@ -38,7 +39,7 @@ unsigned int adcff_c1(unsigned char a)                  /* ldc 1; adc #0xff */
     ldac c
     stax 4(sp)
 __endasm; }
-unsigned int adc00_c1(unsigned char a)                  /* ldc 1; adc #0x00 */
+unsigned int adc00_c1(unsigned char a) __sdcccall(0)                  /* ldc 1; adc #0x00 */
 { __asm
     ldax 5(sp)
     ldc #1
@@ -47,7 +48,7 @@ unsigned int adc00_c1(unsigned char a)                  /* ldc 1; adc #0x00 */
     ldac c
     stax 4(sp)
 __endasm; }
-unsigned int cmp0(unsigned char a)                      /* cmp with memory 0: carry */
+unsigned int cmp0(unsigned char a) __sdcccall(0)                      /* cmp with memory 0: carry */
 { __asm
     ldi #0
     stax 6(sp)
