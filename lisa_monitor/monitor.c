@@ -14,7 +14,7 @@
  *   calc expr           an expression of real numbers, e.g. (2.3 + 5.6) * 2.11,
  *                       worked in bf16 on the FPU and in 32-bit software float,
  *                       each timed with TIMER1 (microseconds at 50 MHz)
- *   banner              the owl again
+ *   banner              see LISA again
  *
  * Numbers are hex, with or without 0x (calc's are decimal).  Backspace
  * edits the line.
@@ -110,7 +110,7 @@ static void putdec(unsigned int v)
 
 /* ---- the banner (lisa_bringup's) ------------------------------------ */
 
-static const char *const owl[] = {
+static const char *const lisa[] = {       /* LISA herself (jgs) */
   "     .{{{}}}}}}.",
   "    {{{{{}}}}}}}.",
   "   {{{{  {{{{{}}}}",
@@ -129,7 +129,7 @@ static void banner(void)
 {
   const char *const *p;
   putnl();
-  for (p = owl; *p; p++) {
+  for (p = lisa; *p; p++) {
     puts(*p);
     putnl();
   }
@@ -735,7 +735,7 @@ static void cmd_help(void)
   puts("stack [depth]      SP and the bytes above it"); putnl();
   puts("free               data end, limit 3800, stack use"); putnl();
   puts("calc expr          real arithmetic: bf16 on the FPU vs float32, timed"); putnl();
-  puts("banner             the owl");               putnl();
+  puts("banner             See LISA");              putnl();
 }
 
 void main(void)
