@@ -6,6 +6,8 @@
 #   make board      program the board, set the cache up, start it and leave
 #                   the console attached: then  socat -,raw,echo=0 TCP:localhost:5555
 #   make sim        the monitor on lisa_sim with a pty: connect to the other pty
+#   make commander  copy the image into the LISA Commander web app's firmware
+#                   list (lisa-test/firmware/lisa_monitor.ihx, assets.js rebuilt)
 
 SDCC   ?= ../sdcc-lisa/build/bin/sdcc
 SIM    ?= ../lisa_sim/lisa_sim
@@ -23,6 +25,10 @@ board: monitor.ihx
 sim: monitor.ihx
 	@echo "run:  socat -d -d pty,raw,echo=0 pty,raw,echo=0   then  $(SIM) -p <ptyA> monitor.ihx"
 	@echo "and   socat -,raw,echo=0 <ptyB>   in another terminal; press Enter for the banner"
+
+commander: monitor.ihx
+	cp monitor.ihx $(TEST)/../firmware/lisa_monitor.ihx
+	python3 $(TEST)/../web/build_assets.py
 
 clean:
 	rm -f *.ihx *.asm *.lst *.rel *.sym *.map *.lk *.rst *.cdb *.noi
