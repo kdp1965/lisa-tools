@@ -399,25 +399,50 @@ static void putdecl(unsigned long v)
     putc(buf[--n]);
 }
 
+static void pad(unsigned char n)
+{
+  while (n--)
+    putc(' ');
+}
+
+static unsigned char digits(unsigned long v)
+{
+  unsigned char n = 1;
+  while (v >= 10) {
+    v /= 10;
+    n++;
+  }
+  return n;
+}
+
 /* [-]int.frac with up to six fraction digits (trailing zeros dropped);
-   from 1e9 up as d.dddddde+N; inf and nan by name */
-static void put_float(float f)
+   from 1e9 up as d.dddddde+N; inf and nan by name.  Padded to width
+   characters (the columns after it line up). */
+static void put_float(float f, unsigned char width)
 {
   union { float f; unsigned long u; } u;
   unsigned long ip;
-  unsigned char i, n, e = 0;
+  unsigned char i, n, w, e = 0;
   char frac[6];
   u.f = f;
   if ((u.u & 0x7f800000ul) == 0x7f800000ul) {
-    puts(u.u & 0x007ffffful ? "nan" : u.u & 0x80000000ul ? "-inf" : "inf");
+    const char *s = u.u & 0x007ffffful ? "nan" : u.u & 0x80000000ul ? "-inf" : "inf";
+    puts(s);
+    w = s[0] == '-' ? 4 : 3;
+    if (w < width)
+      pad(width - w);
     return;
   }
   if (!(u.u & 0x7ffffffful)) {            /* +0 and -0 alike (x - x comes back as -0) */
     puts("0.0");
+    if (width > 3)
+      pad(width - 3);
     return;
   }
+  w = 0;
   if (u.u & 0x80000000ul) {
     putc('-');
+    w++;
     f = -f;
   }
   if (f >= 1000000000.0f)
@@ -428,6 +453,7 @@ static void put_float(float f)
   ip = (unsigned long)f;
   f -= (float)ip;
   putdecl(ip);
+  w += digits(ip);
   for (i = 0; i < 6; i++) {
     unsigned char d;
     f *= 10.0f;
@@ -440,10 +466,14 @@ static void put_float(float f)
   putc('.');
   for (i = 0; i < n; i++)
     putc('0' + frac[i]);
+  w += 1 + n;
   if (e) {
     puts("e+");
     putdec(e);
+    w += 2 + digits(e);
   }
+  if (w < width)
+    pad(width - w);
 }
 
 static void put_hex32(float f)
@@ -626,15 +656,18 @@ static unsigned long timed(unsigned char mode)
   return (unsigned long)n * tick;
 }
 
-/* clocks as microseconds, or milliseconds with two decimals from 10 ms */
+/* clocks as microseconds, or milliseconds with two decimals from 10 ms,
+   right-aligned in nine characters */
 static void put_time(unsigned long clocks)
 {
   unsigned long us = clocks / (CLOCK_HZ / 1000000);
   if (us < 10000) {
+    pad(6 - digits(us));
     putdecl(us);
     puts(" us");
     return;
   }
+  pad(3 - digits(us / 1000));
   putdecl(us / 1000);
   putc('.');
   us = us % 1000 / 10;
@@ -677,20 +710,20 @@ static void cmd_calc(char *p)
   tf = tf > ovh ? tf - ovh : 0;
   tb = tb > ovh ? tb - ovh : 0;
   puts("float32 ");
-  put_float(f);
-  puts("  (");
+  put_float(f, 14);
+  puts(" (");
   put_hex32(f);
-  puts(")  in ");
+  puts(")  ");
   put_time(tf);
   putnl();
   puts("bf16    ");
-  put_float(bf);
-  puts("  (");
+  put_float(bf, 14);
+  puts(" (");
   puthex4(bstk[0]);
-  puts(")  in ");
+  puts(")      ");
   put_time(tb);
-  puts(", off by ");
-  put_float(bf - f);
+  puts("  off by ");
+  put_float(bf - f, 0);
   putnl();
 }
 
