@@ -47,6 +47,11 @@ int main(void)
   CHECK(17, strcmp(buf + 16, "RAM su") < 0 && strcmp("RAM su", buf + 16) > 0 && strcmp(tab[0], tab[1]) < 0 && strcmp(tab[2], tab[0]) < 0);
   CHECK(18, strcmp("", "") == 0 && strcmp(buf, "") == 0 && strcmp("", ram) < 0 && strcmp("b", "a") == 1 && strcmp("a", "b") == -1);
   CHECK(19, strcmp(hi, "a") == 31 && strcmp("a", hi) == -31 && strcmp(hi, ram) > 0 && strcmp(ram, hi) < 0);
+  /* memmove (C): its result, with its d homed in dst's slot once (SDCC's
+     memory suite); a copy from code space, one backward, one forward */
+  r = memmove(buf, "abcdefgh", 9);
+  CHECK(20, r == buf && buf[7] == 'h' && memmove(buf + 1, buf, 7) == buf + 1 && buf[1] == 'a' && buf[7] == 'g' &&
+            memmove(buf, buf + 1, 8) == buf && buf[0] == 'a' && buf[6] == 'g' && buf[7] == 0);
   puts("["); puts(tab[1]); puts("]\n");
   printf("[%s]\n", msg);
   printf("[%s]\n", tab[2]);

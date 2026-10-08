@@ -5,6 +5,10 @@
 #include <string.h>
 volatile unsigned int vk = 700;
 unsigned char fill(unsigned char *p, unsigned int n) { unsigned int i; for (i = 0; i < n; i++) p[i] = (unsigned char)(i * 3); return p[n - 1]; }
+/* the byte parameter arrives in A and is homed in the frame: with a frame
+   past 511 bytes its slot must be in the far layout too (it once landed on
+   RA's low byte: SDCC's bigstack) */
+static unsigned char bigf(unsigned char par1, unsigned int par2) { unsigned char arr[780]; fill(arr, 780); return par1 + (par2 == 42) + (arr[779] == (unsigned char)(779 * 3)); }
 int main(void)
 {
   unsigned char buf[900];
@@ -22,6 +26,7 @@ int main(void)
   memset(buf, 7, sizeof buf);
   CHECK(5, buf[0] == 7 && buf[450] == 7 && buf[899] == 7);
   { char *p = (char *)&buf[k]; *p = 9; CHECK(6, buf[700] == 9); }
+  CHECK(7, bigf(23, 42) == 25 && bigf(0xa5, 0x5a5a) == 0xa6);
   DONE();
   return 0;
 }
