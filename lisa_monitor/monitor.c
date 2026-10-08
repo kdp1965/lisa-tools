@@ -12,7 +12,8 @@
  *   stack [depth]       SP and the depth (32) bytes above it
  *   free                data end, the 0x3800 limit, the stack's use
  *   calc expr           an expression of real numbers, e.g. (2.3 + 5.6) * 2.11,
- *                       worked in bf16 on the FPU and in 32-bit software float
+ *                       worked in bf16 on the FPU and in 32-bit software float,
+ *                       each timed with TIMER1 (microseconds at 50 MHz)
  *   banner              the owl again
  *
  * Numbers are hex, with or without 0x (calc's are decimal).  Backspace
@@ -354,14 +355,37 @@ static void cmd_free(void)
 
 /* A recursive-descent parser over the line - expr: term {(+|-) term},
    term: factor {(*|/) factor}, factor: -factor | (expr) | number, with
-   decimal numbers [digits][.digits] - keeping every value twice: as the C
-   float (the 32-bit software library) and as a bf16_t, which <lisa/bf16.h>
-   multiplies and divides on the chip's unit (the adder is software: the
-   silicon's is defective).  A number becomes bf16 by rounding its float. */
+   decimal numbers [digits][.digits] - compiles the expression to a little
+   reverse-Polish program over a table of constants, each kept twice: as
+   the C float (the 32-bit software library) and as a bf16_t, which
+   <lisa/bf16.h> multiplies and divides on the chip's unit (the adder is
+   software: the silicon's is defective); a number becomes bf16 by
+   rounding its float.  The program is then run in each arithmetic under
+   TIMER1, and once more with the pushes and pops alone, whose time is
+   the interpreter's own and comes off both. */
 
-struct val { float f; bf16_t b; };
+#define CLOCK_HZ 50000000ul             /* the project clock the times assume */
+
+enum { OP_NUM = 1, OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_NEG };
+#define NPROG  40
+#define NCONST 20
+#define NSTACK 8
+static unsigned char prog[NPROG], nprog;
+static float cf[NCONST];
+static bf16_t cb[NCONST];
+static unsigned char nconst;
+static float fstk[NSTACK];
+static bf16_t bstk[NSTACK];
 static char *cp;                        /* the parser's cursor */
 static unsigned char err;
+
+static void emit(unsigned char op)
+{
+  if (nprog < NPROG)
+    prog[nprog++] = op;
+  else
+    err = 1;
+}
 
 static void putdecl(unsigned long v)
 {
@@ -435,10 +459,10 @@ static unsigned char digit(char c)
   return c >= '0' && c <= '9';
 }
 
-static void parse_number(struct val *r)
+static void parse_number(void)
 {
   unsigned long ip = 0, fp = 0;
-  float p10 = 1.0f;
+  float p10 = 1.0f, f;
   unsigned char any = 0;
   while (digit(*cp)) {
     ip = ip * 10 + (*cp++ - '0');
@@ -455,34 +479,36 @@ static void parse_number(struct val *r)
       any = 1;
     }
   }
-  if (!any) {
+  if (!any || nconst == NCONST) {
     err = 1;
     return;
   }
-  r->f = (float)ip + (float)fp / p10;
-  r->b = bf16_from_float(r->f);
+  f = (float)ip + (float)fp / p10;
+  cf[nconst] = f;
+  cb[nconst] = bf16_from_float(f);
+  emit(OP_NUM);
+  emit(nconst++);
 }
 
-static void parse_expr(struct val *r);
+static void parse_expr(void);
 
-static void parse_factor(struct val *r)
+static void parse_factor(void)
 {
   cp = skip(cp);
   if (*cp == '-') {
     cp++;
-    parse_factor(r);
-    r->f = -r->f;
-    r->b = bf16_neg(r->b);
+    parse_factor();
+    emit(OP_NEG);
     return;
   }
   if (*cp == '+') {
     cp++;
-    parse_factor(r);
+    parse_factor();
     return;
   }
   if (*cp == '(') {
     cp++;
-    parse_expr(r);
+    parse_expr();
     cp = skip(cp);
     if (*cp != ')') {
       err = 1;
@@ -491,13 +517,12 @@ static void parse_factor(struct val *r)
     cp++;
     return;
   }
-  parse_number(r);
+  parse_number();
 }
 
-static void parse_term(struct val *r)
+static void parse_term(void)
 {
-  struct val v;
-  parse_factor(r);
+  parse_factor();
   for (;;) {
     char op;
     if (err)
@@ -507,23 +532,14 @@ static void parse_term(struct val *r)
     if (op != '*' && op != '/')
       return;
     cp++;
-    parse_factor(&v);
-    if (err)
-      return;
-    if (op == '*') {
-      r->f = r->f * v.f;
-      r->b = bf16_mul(r->b, v.b);
-    } else {
-      r->f = r->f / v.f;
-      r->b = bf16_div(r->b, v.b);
-    }
+    parse_factor();
+    emit(op == '*' ? OP_MUL : OP_DIV);
   }
 }
 
-static void parse_expr(struct val *r)
+static void parse_expr(void)
 {
-  struct val v;
-  parse_term(r);
+  parse_term();
   for (;;) {
     char op;
     if (err)
@@ -533,31 +549,113 @@ static void parse_expr(struct val *r)
     if (op != '+' && op != '-')
       return;
     cp++;
-    parse_term(&v);
-    if (err)
-      return;
-    if (op == '+') {
-      r->f = r->f + v.f;
-      r->b = bf16_add(r->b, v.b);
+    parse_term();
+    emit(op == '+' ? OP_ADD : OP_SUB);
+  }
+}
+
+/* The program: mode 0 in float32, 1 in bf16, 2 the pushes and pops alone
+   (float-sized moves, no arithmetic) for the interpreter's own time.  The
+   result is left at the bottom of the stack. */
+static void run(unsigned char mode)
+{
+  unsigned char i, sp = 0;
+  for (i = 0; i < nprog; i++) {
+    unsigned char op = prog[i];
+    if (op == OP_NUM) {
+      unsigned char k = prog[++i];
+      if (sp == NSTACK) {
+        err = 1;
+        return;
+      }
+      if (mode == 1)
+        bstk[sp] = cb[k];
+      else
+        fstk[sp] = cf[k];
+      sp++;
+    } else if (op == OP_NEG) {
+      if (mode == 0)
+        fstk[sp - 1] = -fstk[sp - 1];
+      else if (mode == 1)
+        bstk[sp - 1] = bf16_neg(bstk[sp - 1]);
     } else {
-      r->f = r->f - v.f;
-      r->b = bf16_sub(r->b, v.b);
+      sp--;                             /* the right operand at sp, the left below it */
+      if (mode == 0) {
+        float a = fstk[sp - 1], b = fstk[sp];
+        fstk[sp - 1] = op == OP_ADD ? a + b : op == OP_SUB ? a - b : op == OP_MUL ? a * b : a / b;
+      } else if (mode == 1) {
+        bf16_t a = bstk[sp - 1], b = bstk[sp];
+        bstk[sp - 1] = op == OP_ADD ? bf16_add(a, b) : op == OP_SUB ? bf16_sub(a, b) :
+                       op == OP_MUL ? bf16_mul(a, b) : bf16_div(a, b);
+      } else
+        fstk[sp - 1] = fstk[sp];
     }
   }
 }
 
+/* TIMER1 restarted with a tick every prediv + 1 clocks */
+static void timer_set(unsigned int prediv)
+{
+  TIMER1_CTRL = 0;
+  TIMER1_PREDIV_LO = (unsigned char)prediv;
+  TIMER1_PREDIV_HI = prediv >> 8;
+  TIMER1_DIV_LO = 1;
+  TIMER1_DIV_HI = 0;
+  TIMER1_COUNT = 0;
+  TIMER1_CTRL = TIMER_CTRL_ENABLE;
+}
+
+/* the clocks run(mode) takes.  COUNT is 8 bits and a wrap cannot be
+   seen, so a coarse pass with 1 ms ticks (up to 255 ms) finds the
+   magnitude, and a second one uses the finest tick, 10 us at least, whose
+   250 steps still cover it. */
+static unsigned long timed(unsigned char mode)
+{
+  unsigned long tick;
+  unsigned char n;
+  timer_set(CLOCK_HZ / 1000 - 1);
+  run(mode);
+  n = TIMER1_COUNT;
+  tick = ((unsigned long)n + 1) * (CLOCK_HZ / 1000) / 250;
+  if (tick < CLOCK_HZ / 100000)
+    tick = CLOCK_HZ / 100000;
+  timer_set((unsigned int)(tick - 1));
+  run(mode);
+  n = TIMER1_COUNT;
+  TIMER1_CTRL = 0;
+  return (unsigned long)n * tick;
+}
+
+/* clocks as microseconds, or milliseconds with two decimals from 10 ms */
+static void put_time(unsigned long clocks)
+{
+  unsigned long us = clocks / (CLOCK_HZ / 1000000);
+  if (us < 10000) {
+    putdecl(us);
+    puts(" us");
+    return;
+  }
+  putdecl(us / 1000);
+  putc('.');
+  us = us % 1000 / 10;
+  putc('0' + us / 10);
+  putc('0' + us % 10);
+  puts(" ms");
+}
+
 static void cmd_calc(char *p)
 {
-  struct val r;
-  float bf;
+  unsigned long ovh, tf, tb;
+  float f, bf;
   cp = skip(p);
   err = 0;
+  nprog = nconst = 0;
   if (!*cp) {
     puts("calc expr      + - * / ( ) and decimal numbers, e.g. calc (2.3 + 5.6) * 2.11");
     putnl();
     return;
   }
-  parse_expr(&r);
+  parse_expr();
   cp = skip(cp);
   if (err || *cp) {
     puts("? at '");
@@ -566,19 +664,33 @@ static void cmd_calc(char *p)
     putnl();
     return;
   }
+  ovh = timed(2);
+  tf = timed(0);
+  f = fstk[0];
+  tb = timed(1);
+  bf = bf16_to_float(bstk[0]);
+  if (err) {
+    puts("? too deep");
+    putnl();
+    return;
+  }
+  tf = tf > ovh ? tf - ovh : 0;
+  tb = tb > ovh ? tb - ovh : 0;
   puts("float32 ");
-  put_float(r.f);
+  put_float(f);
   puts("  (");
-  put_hex32(r.f);
-  putc(')');
+  put_hex32(f);
+  puts(")  in ");
+  put_time(tf);
   putnl();
-  bf = bf16_to_float(r.b);
   puts("bf16    ");
   put_float(bf);
   puts("  (");
-  puthex4(r.b);
-  puts(")  off by ");
-  put_float(bf - r.f);
+  puthex4(bstk[0]);
+  puts(")  in ");
+  put_time(tb);
+  puts(", off by ");
+  put_float(bf - f);
   putnl();
 }
 
@@ -589,7 +701,7 @@ static void cmd_help(void)
   puts("mw addr v [v ...]  write bytes");            putnl();
   puts("stack [depth]      SP and the bytes above it"); putnl();
   puts("free               data end, limit 3800, stack use"); putnl();
-  puts("calc expr          real arithmetic: bf16 on the FPU vs float32"); putnl();
+  puts("calc expr          real arithmetic: bf16 on the FPU vs float32, timed"); putnl();
   puts("banner             the owl");               putnl();
 }
 
