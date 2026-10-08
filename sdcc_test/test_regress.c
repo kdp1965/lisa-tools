@@ -42,6 +42,16 @@ static volatile unsigned char __at(0x40) scratch;
       A that an earlier compare tested needs its own zero test before the
       branch (Z was the compare's) */
 static unsigned char divq(unsigned char a, unsigned char b) { return b / a; }
+/* 24. a __near pointer kept in IX for the read in the body is bumped in
+       place (inx) by p++: the loop's test must reload IX, or it reads the
+       old byte and runs once more (2026-10-07, the loop scan) */
+static unsigned char near_walk(__near const char *p)
+{
+  unsigned char k = 0;
+  unsigned int s = 0;
+  if (*p) do { k++; s += *p; p++; } while (*p);
+  return k + (s == 'a' + 'b' + 'c');
+}
 static unsigned char words(char *s)
 {
   unsigned char n = 0;
@@ -129,6 +139,11 @@ int main(void)
     int ne = !(l == lp), ne2 = !(l == l);
     CHECK(22, ge == 0 && ge2 == 1 && ge3 == 1 && le == 0 && le2 == 1 && le3 == 1);
     CHECK(23, ige == 0 && cge == 0 && ugt == 1 && ugt2 == 0 && ule == 0 && ule2 == 1 && ne == 1 && ne2 == 0);
+  }
+  {
+    char nb[4];
+    strcpy(nb, "abc");
+    CHECK(24, near_walk(nb) == 4);
   }
 
   DONE();
