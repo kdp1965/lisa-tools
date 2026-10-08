@@ -11,11 +11,15 @@
  *   mw addr v [v ...]   write bytes from addr on
  *   stack [depth]       SP and the depth (32) bytes above it
  *   free                data end, the 0x3800 limit, the stack's use
+ *   calc expr           an expression of real numbers, e.g. (2.3 + 5.6) * 2.11,
+ *                       worked in bf16 on the FPU and in 32-bit software float
  *   banner              the owl again
  *
- * Numbers are hex, with or without 0x.  Backspace edits the line.
+ * Numbers are hex, with or without 0x (calc's are decimal).  Backspace
+ * edits the line.
  */
 #include <tt07.h>
+#include <lisa/bf16.h>
 
 /* ---- the UART ------------------------------------------------------- */
 
@@ -346,6 +350,238 @@ static void cmd_free(void)
   putnl();
 }
 
+/* ---- calc: real arithmetic, bf16 on the FPU against float32 ---------- */
+
+/* A recursive-descent parser over the line - expr: term {(+|-) term},
+   term: factor {(*|/) factor}, factor: -factor | (expr) | number, with
+   decimal numbers [digits][.digits] - keeping every value twice: as the C
+   float (the 32-bit software library) and as a bf16_t, which <lisa/bf16.h>
+   multiplies and divides on the chip's unit (the adder is software: the
+   silicon's is defective).  A number becomes bf16 by rounding its float. */
+
+struct val { float f; bf16_t b; };
+static char *cp;                        /* the parser's cursor */
+static unsigned char err;
+
+static void putdecl(unsigned long v)
+{
+  char buf[10];
+  unsigned char n = 0;
+  do {
+    buf[n++] = '0' + (unsigned char)(v % 10);
+    v /= 10;
+  } while (v);
+  while (n)
+    putc(buf[--n]);
+}
+
+/* [-]int.frac with up to six fraction digits (trailing zeros dropped);
+   from 1e9 up as d.dddddde+N; inf and nan by name */
+static void put_float(float f)
+{
+  union { float f; unsigned long u; } u;
+  unsigned long ip;
+  unsigned char i, n, e = 0;
+  char frac[6];
+  u.f = f;
+  if ((u.u & 0x7f800000ul) == 0x7f800000ul) {
+    puts(u.u & 0x007ffffful ? "nan" : u.u & 0x80000000ul ? "-inf" : "inf");
+    return;
+  }
+  if (!(u.u & 0x7ffffffful)) {            /* +0 and -0 alike (x - x comes back as -0) */
+    puts("0.0");
+    return;
+  }
+  if (u.u & 0x80000000ul) {
+    putc('-');
+    f = -f;
+  }
+  if (f >= 1000000000.0f)
+    while (f >= 10.0f) {
+      f /= 10.0f;
+      e++;
+    }
+  ip = (unsigned long)f;
+  f -= (float)ip;
+  putdecl(ip);
+  for (i = 0; i < 6; i++) {
+    unsigned char d;
+    f *= 10.0f;
+    d = (unsigned char)f;
+    frac[i] = (char)d;
+    f -= (float)d;
+  }
+  for (n = 6; n > 1 && frac[n - 1] == 0; n--)
+    ;
+  putc('.');
+  for (i = 0; i < n; i++)
+    putc('0' + frac[i]);
+  if (e) {
+    puts("e+");
+    putdec(e);
+  }
+}
+
+static void put_hex32(float f)
+{
+  union { float f; unsigned long u; } u;
+  u.f = f;
+  puthex4((unsigned int)(u.u >> 16));
+  puthex4((unsigned int)u.u);
+}
+
+static unsigned char digit(char c)
+{
+  return c >= '0' && c <= '9';
+}
+
+static void parse_number(struct val *r)
+{
+  unsigned long ip = 0, fp = 0;
+  float p10 = 1.0f;
+  unsigned char any = 0;
+  while (digit(*cp)) {
+    ip = ip * 10 + (*cp++ - '0');
+    any = 1;
+  }
+  if (*cp == '.') {
+    cp++;
+    while (digit(*cp)) {
+      if (p10 < 10000000.0f) {             /* seven digits is all a float holds */
+        fp = fp * 10 + (*cp - '0');
+        p10 *= 10.0f;
+      }
+      cp++;
+      any = 1;
+    }
+  }
+  if (!any) {
+    err = 1;
+    return;
+  }
+  r->f = (float)ip + (float)fp / p10;
+  r->b = bf16_from_float(r->f);
+}
+
+static void parse_expr(struct val *r);
+
+static void parse_factor(struct val *r)
+{
+  cp = skip(cp);
+  if (*cp == '-') {
+    cp++;
+    parse_factor(r);
+    r->f = -r->f;
+    r->b = bf16_neg(r->b);
+    return;
+  }
+  if (*cp == '+') {
+    cp++;
+    parse_factor(r);
+    return;
+  }
+  if (*cp == '(') {
+    cp++;
+    parse_expr(r);
+    cp = skip(cp);
+    if (*cp != ')') {
+      err = 1;
+      return;
+    }
+    cp++;
+    return;
+  }
+  parse_number(r);
+}
+
+static void parse_term(struct val *r)
+{
+  struct val v;
+  parse_factor(r);
+  for (;;) {
+    char op;
+    if (err)
+      return;
+    cp = skip(cp);
+    op = *cp;
+    if (op != '*' && op != '/')
+      return;
+    cp++;
+    parse_factor(&v);
+    if (err)
+      return;
+    if (op == '*') {
+      r->f = r->f * v.f;
+      r->b = bf16_mul(r->b, v.b);
+    } else {
+      r->f = r->f / v.f;
+      r->b = bf16_div(r->b, v.b);
+    }
+  }
+}
+
+static void parse_expr(struct val *r)
+{
+  struct val v;
+  parse_term(r);
+  for (;;) {
+    char op;
+    if (err)
+      return;
+    cp = skip(cp);
+    op = *cp;
+    if (op != '+' && op != '-')
+      return;
+    cp++;
+    parse_term(&v);
+    if (err)
+      return;
+    if (op == '+') {
+      r->f = r->f + v.f;
+      r->b = bf16_add(r->b, v.b);
+    } else {
+      r->f = r->f - v.f;
+      r->b = bf16_sub(r->b, v.b);
+    }
+  }
+}
+
+static void cmd_calc(char *p)
+{
+  struct val r;
+  float bf;
+  cp = skip(p);
+  err = 0;
+  if (!*cp) {
+    puts("calc expr      + - * / ( ) and decimal numbers, e.g. calc (2.3 + 5.6) * 2.11");
+    putnl();
+    return;
+  }
+  parse_expr(&r);
+  cp = skip(cp);
+  if (err || *cp) {
+    puts("? at '");
+    puts(cp);
+    putc('\'');
+    putnl();
+    return;
+  }
+  puts("float32 ");
+  put_float(r.f);
+  puts("  (");
+  put_hex32(r.f);
+  putc(')');
+  putnl();
+  bf = bf16_to_float(r.b);
+  puts("bf16    ");
+  put_float(bf);
+  puts("  (");
+  puthex4(r.b);
+  puts(")  off by ");
+  put_float(bf - r.f);
+  putnl();
+}
+
 static void cmd_help(void)
 {
   puts("help               this list");            putnl();
@@ -353,6 +589,7 @@ static void cmd_help(void)
   puts("mw addr v [v ...]  write bytes");            putnl();
   puts("stack [depth]      SP and the bytes above it"); putnl();
   puts("free               data end, limit 3800, stack use"); putnl();
+  puts("calc expr          real arithmetic: bf16 on the FPU vs float32"); putnl();
   puts("banner             the owl");               putnl();
 }
 
@@ -383,6 +620,8 @@ void main(void)
       cmd_stack(p + 5);
     else if (word_is(p, "free"))
       cmd_free();
+    else if (word_is(p, "calc"))
+      cmd_calc(p + 4);
     else if (word_is(p, "banner"))
       banner();
     else {

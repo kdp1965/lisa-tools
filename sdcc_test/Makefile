@@ -19,7 +19,7 @@ PROBES    = test_aluprobe test_sltprobe test_irqhaz
 OUTPUT    = hello test_printf test_owl
 # The data cache on an RP2040 SPI RAM (hw_test.mjs spiram=): built, run on the
 # chip only; test_cacherm's expectations are the TT07 silicon's swap n(sp)
-CACHE     = test_cacherm test_cachermw test_cachepush test_cachewb test_cacheseq test_cacheloop
+CACHE     = test_cacherm test_cachermw test_cachepush test_cachewb test_cacheseq test_cacheloop test_cacheperiph
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES) $(CACHE)
@@ -43,7 +43,7 @@ test_bf16f.ihx: test_bf16f.c $(DEPS)
 
 # the cache tests use the 32K data space as the TT07 cache folds it: stack
 # at the top, data below 0x3800 (the linker checks)
-test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx test_ptroff.ihx: %.ihx: %.c $(DEPS)
+test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx test_cacheperiph.ihx test_ptroff.ihx: %.ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) --tt07-cache -o $@ $<
 
 # the C interrupt handler test is only correct on a core with the respin's
