@@ -194,6 +194,23 @@ public:
     // the first line of a function past its prologue, 0 if it has none
     uint16_t first_line_addr(const CdbFunction& f) const;
 
+    // ---- the TT07 breakpoint hazard ----
+    // A store's RAM write completes in the fetch cycle after its
+    // instruction; a hardware breakpoint on the next instruction raises
+    // `stop` in that very cycle, and while stopped the data address is IX
+    // and the data the debugger's last written byte (lisa_core.v: d_addr =
+    // stop ? ix, d_o = dbg_di).  So a breakpoint halt right after a store
+    // drops the store and overwrites RAM[IX] - silently corrupting the
+    // program.  A debugger must never stop right after one.
+    static bool is_store(uint16_t op);          // writes data RAM (or the peripherals)
+    static int  sp_effect(uint16_t op);         // what it does to SP
+    // The first address at or after x, run straight on from x, whose
+    // fall-through predecessor is not a store: x itself when x - 1 is not
+    // one.  *sp_delta is the SP change of the instructions run past to get
+    // there (SP at x = SP there - *sp_delta).  If a branch, call or return
+    // comes first the walk cannot go on: x is returned and *ok cleared.
+    static uint16_t safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool* ok = nullptr);
+
 private:
     bool loaded_ = false;
     std::string path_, dir_;

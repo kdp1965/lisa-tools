@@ -848,6 +848,59 @@ std::vector<Cdb::StackFrame> Cdb::unwind(uint16_t pc, uint16_t sp, uint16_t ra, 
     return out;
 }
 
+// ---- the TT07 breakpoint hazard ------------------------------------------
+
+// The RTL's list (lisa_core.v exec_state, d_we_r <= 1): st (sta/stax),
+// swap, swapi, sra, push a, dcx, inx, push ix, stxx, shl16, shr16 - and the
+// divider's stray write (div/rem complete with a write in stage two)
+bool Cdb::is_store(uint16_t op) {
+    if (!(op & 0x8000)) return false;                    // jal
+    uint16_t t5 = op >> 11, t6 = op >> 10, t7 = op >> 9, t10 = op >> 6, t14 = op >> 2;
+    if (t5 == 0x1f) return true;                         // sta / stax
+    if (t6 == 0x27 || t6 == 0x39) return true;           // dcx / inx
+    if (t6 == 0x3b || t6 == 0x37) return true;           // swap / swapi
+    if (t7 == 0x67) return true;                         // stxx
+    if ((op >> 4) == 0xa02 || (op >> 4) == 0xa03) return true;   // shl16 / shr16
+    if (t10 == 0x282) return true;                       // push a
+    if (t14 == 0x2858 || t14 == 0x285a) return true;     // sra / push ix
+    if ((op >> 4) == 0xa30 || (op >> 4) == 0xa31) return true;   // div / rem
+    return false;
+}
+
+int Cdb::sp_effect(uint16_t op) {
+    if (!(op & 0x8000)) return 0;
+    uint16_t t6 = op >> 10, t10 = op >> 6, t14 = op >> 2;
+    if (t10 == 0x282) return -1;                         // push a
+    if (t10 == 0x283) return 1;                          // pop a
+    if (t14 == 0x2858 || t14 == 0x285a) return -2;       // sra / push ix
+    if (t14 == 0x2859 || t14 == 0x285b) return 2;        // lra / pop ix
+    if (t6 == 0x25) return sext10(op);                   // ads
+    return 0;
+}
+
+uint16_t Cdb::safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool* ok) {
+    int delta = 0;
+    uint16_t a = x & 0x7fff;
+    if (ok) *ok = true;
+    for (int i = 0; i < 16 && is_store(rdcode((uint16_t)((a - 1) & 0x7fff))); i++) {
+        // run the instruction at a, stop after it - unless it transfers control
+        uint16_t op = rdcode(a);
+        uint16_t t5 = op >> 11, t6 = op >> 10, t9 = op >> 7, t10 = op >> 6, t11 = op >> 5;
+        bool transfer = !(op & 0x8000) || t5 == 0x15 || t5 == 0x16 || t5 == 0x17 || t6 == 0x23 || t9 == 0x114 ||
+                        t10 == 0x22c || t10 == 0x22d || t10 == 0x22e || t11 == 0x454 || t11 == 0x455 ||
+                        (op >> 8) == 0xa2 || (op >> 4) == 0xa18 || ((op >> 2) & 0x3ffc) == 0x22b0;  // if / ldx / xchg ra|ia|sp|spix
+        if (transfer) {
+            if (ok) *ok = false;
+            if (sp_delta) *sp_delta = 0;
+            return x & 0x7fff;
+        }
+        delta += sp_effect(op);
+        a = (a + 1) & 0x7fff;
+    }
+    if (sp_delta) *sp_delta = delta;
+    return a;
+}
+
 // ---- where a line is left ----------------------------------------------
 
 uint16_t Cdb::first_line_addr(const CdbFunction& f) const {
