@@ -104,6 +104,7 @@ public:
     // the text of a source line (1-based), "" if the file is not found
     std::string source(const std::string& file, int line) const;
     int source_lines(const std::string& file) const;    // 0 if not found
+    std::string source_path(const std::string& file) const;   // where it was found, "" if not
 
     // functions and symbols
     const CdbFunction* function_at(uint16_t addr) const;

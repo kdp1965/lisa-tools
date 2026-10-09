@@ -401,6 +401,11 @@ std::string Cdb::source(const std::string& file, int line) const {
     return it->second[line - 1];
 }
 
+std::string Cdb::source_path(const std::string& file) const {
+    for (const auto& kv : source_paths_) if (same_file(kv.first, file)) return kv.second;
+    return "";
+}
+
 int Cdb::source_lines(const std::string& file) const {
     source(file, 1);                                     // caches it
     for (const auto& kv : source_cache_) if (same_file(kv.first, file)) return (int)kv.second.size();
