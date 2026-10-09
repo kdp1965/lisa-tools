@@ -86,6 +86,8 @@ int main(int argc, char** argv) {
         if (sim.load_firmware(firmware_file)) {
             printf("Loaded %zu instruction words from '%s'\n",
                    sim.memory().firmware_words(), firmware_file.c_str());
+            if (sim.cdb().loaded() && !batch)   // batch stdout is the program's output
+                printf("Debug info from '%s'\n", sim.cdb().path().c_str());
         } else {
             fprintf(stderr, "Error: could not load '%s'\n", firmware_file.c_str());
             if (batch) return 1;

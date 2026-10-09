@@ -35,6 +35,25 @@ void LisaCore::reset() {
     cycle_count_ = 0;
     inst_count_ = 0;
     last_inst_ = 0;
+    bp_skip_pc_ = 0xFFFF;
+    calls_.clear();
+}
+
+// --- Shadow call stack ---
+
+void LisaCore::call_push(uint16_t ret_pc, bool isr) {
+    calls_.push_back({ret_pc, sp_, isr});
+    if (calls_.size() > 512)            // runaway: keep the recent half
+        calls_.erase(calls_.begin(), calls_.begin() + 256);
+}
+
+void LisaCore::call_return(uint16_t pc, bool isr) {
+    for (size_t i = calls_.size(); i-- > 0; ) {
+        if (calls_[i].isr == isr && (isr || calls_[i].ret_pc == pc)) {
+            calls_.resize(i);
+            return;
+        }
+    }
 }
 
 // --- Memory access helpers ---
@@ -129,6 +148,7 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
     ia_ = (pc_) & PC_MASK;
     ie_ = false;
     isr_jump_ = true;
+    call_push(ia_, true);
     cflag_isr_ = cflag_;
     zflag_isr_ = zflag_;
     signed_inv_isr_ = signed_inv_save_;
@@ -256,11 +276,12 @@ int LisaCore::step() {
 int LisaCore::step_inst() {
     if (halted_) return 1;
 
-    // Check breakpoint
-    if (is_breakpoint(pc_)) {
+    // Check breakpoint (not the one resumed from)
+    if (is_breakpoint(pc_) && pc_ != bp_skip_pc_) {
         halted_ = true;
         return 1;
     }
+    bp_skip_pc_ = 0xFFFF;
 
     // Fetch instruction
     uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
@@ -321,6 +342,7 @@ int LisaCore::step_inst() {
         if (!isr_jump_) {   // the vector jal keeps the interrupted RA
             ra_ = (pc_ + 1) & PC_MASK;
             ra_cond_ = (cond_ >> 1) & 1;
+            call_push(ra_, false);
         }
         isr_jump_ = false;
         pc_ = target;
@@ -379,6 +401,7 @@ int LisaCore::step_inst() {
     if (top6 == 0x23) {  // 100011 = RET #imm8
         a_ = imm8;
         pc_ = ra_ & PC_MASK;
+        call_return(pc_, false);
         cond_ = 0x02 | (ra_cond_ ? 1 : 0);  // cond[1]=1, cond[0]=ra_cond
         inst_count_++;
         cycle_count_ += cycles;
@@ -388,6 +411,7 @@ int LisaCore::step_inst() {
     // ret: inst[15:7]==100010100
     if ((inst >> 7) == 0x114) {  // 100010100 = RET
         pc_ = ra_ & PC_MASK;
+        call_return(pc_, false);
         cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         inst_count_++;
         cycle_count_ += cycles;
@@ -399,6 +423,7 @@ int LisaCore::step_inst() {
     if (top10 == 0x22C) {  // 1000101100
         if (cflag_) {
             pc_ = ra_ & PC_MASK;
+            call_return(pc_, false);
             cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         } else {
             pc_ = (pc_ + 1) & PC_MASK;
@@ -413,6 +438,7 @@ int LisaCore::step_inst() {
     if (top10 == 0x22E) {  // 1000101110
         if (zflag_) {
             pc_ = ra_ & PC_MASK;
+            call_return(pc_, false);
             cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         } else {
             pc_ = (pc_ + 1) & PC_MASK;
@@ -426,6 +452,7 @@ int LisaCore::step_inst() {
     // rets: inst[15:6]==1000101101 = return from ISR
     if (top10 == 0x22D) {  // 1000101101
         pc_ = ia_;
+        call_return(pc_, true);
         ie_ = true;
         cflag_ = cflag_isr_;
         zflag_ = zflag_isr_;
@@ -455,6 +482,7 @@ int LisaCore::step_inst() {
         if (!isr_jump_) {
             ra_ = (pc_ + 1) & PC_MASK;
             ra_cond_ = (cond_ >> 1) & 1;
+            call_push(ra_, false);
         }
         bool new_ix_cond = (cond_ >> 1) & 1;
         pc_ = ix_ & PC_MASK;

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include "cdb.h"
 
 class LisaSimulator;
 
@@ -45,12 +46,31 @@ private:
     void cmd_bf16();
     void cmd_info();
 
+    // Source-level commands (the .cdb sdcc --debug writes, see ../lisa_cdb)
+    void cmd_break(const std::vector<std::string>& args);
+    void cmd_list(const std::vector<std::string>& args);
+    void cmd_next(bool into);
+    void cmd_finish();
+    void cmd_print(const std::vector<std::string>& args);
+    void cmd_locals();
+    void cmd_bt();
+    void cmd_cdb(const std::vector<std::string>& args);
+
     // Helpers
     std::vector<std::string> tokenize(const std::string& line);
     uint32_t parse_number(const std::string& s);
     uint32_t parse_addr(const std::string& s);  // Defaults to hex for addresses
     bool require_stopped(const char* cmd_name);
     static std::string get_history_path();
+
+    // Source-level helpers
+    void print_location();                      // the PC line, then file:line and the source
+    void report_cdb();                          // what load found
+    bool resolve_location(const std::string& spec, uint16_t& addr, std::string& what);
+    bool frame_ra_saved(const lisa::CdbFunction& f, uint16_t pc);
+    lisa::Cdb::Frame frame_of(size_t depth, uint16_t& pc, const lisa::CdbFunction** fn);
+    std::string list_file_;                     // where `list` continues
+    int list_line_ = 0;                         // the last line listed, 0: list around the PC
 };
 
 #endif

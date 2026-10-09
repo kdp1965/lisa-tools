@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <vector>
 
 class LisaMemory;
 struct BF16Unit;
@@ -58,10 +59,23 @@ public:
     LisaCoreState get_state() const;
     void set_state(const LisaCoreState& state);
 
-    // Debug control
+    // Debug control.  Resuming steps over a breakpoint at the current PC
+    // (the one just hit) instead of hitting it again.
     void halt()    { halted_ = true; }
-    void resume()  { halted_ = false; }
+    void resume()  { halted_ = false; bp_skip_pc_ = pc_; }
     bool is_halted() const { return halted_; }
+
+    // The calls in flight, for backtraces and stepping over calls: a
+    // frame is pushed by a taken jal / call ix (not the vector jal of an
+    // interrupt) and by an interrupt, and popped by the return to it -
+    // the topmost frame whose return address matches, so a jal used as a
+    // jump, whose RA is never returned to, is dropped along with it.
+    struct CallFrame {
+        uint16_t ret_pc;    // where the return goes
+        uint16_t sp;        // SP when the call was made: the callee's entry SP
+        bool     isr;       // an interrupt (returned by rets)
+    };
+    const std::vector<CallFrame>& call_stack() const { return calls_; }
 
     // Breakpoints
     static constexpr int MAX_BREAKPOINTS = 6;
@@ -128,6 +142,12 @@ private:
     // Breakpoints
     uint16_t breakpoints_[MAX_BREAKPOINTS];
     bool     bp_active_[MAX_BREAKPOINTS];
+    uint16_t bp_skip_pc_ = 0xFFFF;
+
+    // Shadow call stack
+    std::vector<CallFrame> calls_;
+    void call_push(uint16_t ret_pc, bool isr);
+    void call_return(uint16_t pc, bool isr);
 
     // Interrupts
     uint8_t  int_pending_;

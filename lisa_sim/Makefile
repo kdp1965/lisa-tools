@@ -1,5 +1,5 @@
 CXX      ?= g++
-CXXFLAGS  = -std=c++17 -Wall -Wextra -Wpedantic -pthread
+CXXFLAGS  = -std=c++17 -Wall -Wextra -Wpedantic -pthread -I../lisa_cdb
 LDFLAGS   =
 
 # Optional readline support
@@ -16,8 +16,10 @@ else
   CXXFLAGS += -g -O0
 endif
 
+# the source-level debugging reads sdcc's .cdb files through ../lisa_cdb,
+# shared with lisa_ide
 SRCS = main.cxx core.cxx memory.cxx periph.cxx uart.cxx bf16.cxx div.cxx \
-       disasm.cxx simulator.cxx cli.cxx serial.cxx
+       disasm.cxx simulator.cxx cli.cxx serial.cxx ../lisa_cdb/cdb.cxx
 OBJS = $(SRCS:.cxx=.o)
 TARGET = lisa_sim
 
@@ -49,6 +51,7 @@ uart.o:      uart.cxx uart.h serial.h
 bf16.o:      bf16.cxx bf16.h
 div.o:       div.cxx div.h
 disasm.o:    disasm.cxx disasm.h
-simulator.o: simulator.cxx simulator.h core.h memory.h periph.h uart.h
-cli.o:       cli.cxx cli.h simulator.h disasm.h
+simulator.o: simulator.cxx simulator.h core.h memory.h periph.h uart.h ../lisa_cdb/cdb.h
+cli.o:       cli.cxx cli.h simulator.h disasm.h ../lisa_cdb/cdb.h
 serial.o:    serial.cxx serial.h
+../lisa_cdb/cdb.o: ../lisa_cdb/cdb.cxx ../lisa_cdb/cdb.h

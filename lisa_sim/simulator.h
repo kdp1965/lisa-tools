@@ -17,15 +17,19 @@
 #include "uart.h"
 #include "bf16.h"
 #include "div.h"
+#include "cdb.h"
 
 class LisaSimulator {
 public:
     LisaSimulator();
     ~LisaSimulator();
 
-    // Lifecycle
+    // Lifecycle.  Loading firmware also loads the debug information sdcc
+    // --debug writes beside it (<base>.cdb), if there is any.
     void reset();
     bool load_firmware(const std::string& filename);
+    lisa::Cdb& cdb() { return cdb_; }
+    const std::string& firmware_path() const { return firmware_path_; }
 
     // Execution control
     int  step();                    // Execute one instruction, return cycles
@@ -74,6 +78,11 @@ public:
     using OutputCallback = std::function<void(const std::string&)>;
     void set_output_callback(OutputCallback cb) { output_cb_ = cb; }
 
+    // Called from the background thread when it stops at a breakpoint or
+    // a brk (instead of the default "[Simulation halted ...]" line)
+    using StopCallback = std::function<void()>;
+    void set_stop_callback(StopCallback cb) { stop_cb_ = cb; }
+
 private:
     LisaCore        core_;
     LisaMemory      memory_;
@@ -82,6 +91,8 @@ private:
     LisaUart        uart2_;
     BF16Unit        bf16_;
     LisaDiv         div_;
+    lisa::Cdb       cdb_;
+    std::string     firmware_path_;
 
     std::atomic<bool> running_{false};
     bool trace_on_;
@@ -96,6 +107,7 @@ private:
     std::atomic<bool> thread_active_{false};
 
     OutputCallback output_cb_;
+    StopCallback   stop_cb_;
 
     void connect_modules();
     void check_uart_output();

@@ -18,11 +18,11 @@ TEST   ?= ../../tt07-um-lisa-ttlc/lisa-test/test
 all: monitor.ihx monitor_small.ihx
 
 monitor.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib)
-	$(SDCC) -mlisa --tt07-cache -o $@ $<
+	$(SDCC) -mlisa --debug --tt07-cache -o $@ $<
 
 # the 128-byte RAM, nothing special on the board: calc in bf16 only
 monitor_small.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib)
-	$(SDCC) -mlisa -DSMALL -o $@ $<
+	$(SDCC) -mlisa --debug -DSMALL -o $@ $<
 
 board: monitor.ihx
 	cd $(TEST) && $(NODE) hw_test.mjs connect monitor=$(CURDIR)/monitor.ihx
@@ -40,4 +40,4 @@ commander: monitor.ihx monitor_small.ihx
 	python3 $(TEST)/../web/build_assets.py
 
 clean:
-	rm -f *.ihx *.asm *.lst *.rel *.sym *.map *.lk *.rst *.cdb *.noi
+	rm -f *.ihx *.asm *.lst *.rel *.sym *.map *.lk *.rst *.cdb *.adb *.noi

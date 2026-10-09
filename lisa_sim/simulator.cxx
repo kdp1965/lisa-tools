@@ -37,7 +37,17 @@ void LisaSimulator::reset() {
 }
 
 bool LisaSimulator::load_firmware(const std::string& filename) {
-    return memory_.load_hex(filename);
+    if (!memory_.load_hex(filename))
+        return false;
+    firmware_path_ = filename;
+    // the debug information beside it: firmware.ihx -> firmware.cdb
+    std::string base = filename;
+    size_t dot = base.find_last_of('.');
+    if (dot != std::string::npos && dot > base.find_last_of('/') + 1)
+        base = base.substr(0, dot);
+    cdb_ = lisa::Cdb();
+    cdb_.load(base + ".cdb");
+    return true;
 }
 
 int LisaSimulator::step() {
@@ -136,8 +146,12 @@ void LisaSimulator::sim_thread_func(uint64_t max_cycles) {
     if (!stop_requested_.load()) {
         auto st = get_state();
         if (core_.is_halted()) {
-            printf("\n[Simulation halted at PC=%04X]\n", st.pc);
-            fflush(stdout);
+            if (stop_cb_) {
+                stop_cb_();
+            } else {
+                printf("\n[Simulation halted at PC=%04X]\n", st.pc);
+                fflush(stdout);
+            }
         } else if (max_cycles > 0 && cycles >= max_cycles) {
             printf("\n[Cycle limit reached at PC=%04X after %llu cycles]\n",
                    st.pc, (unsigned long long)st.cycle_count);
