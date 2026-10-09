@@ -952,9 +952,7 @@ static unsigned int timed(unsigned char mode)
   timer_set((unsigned int)(CLOCK_HZ / 1000) - 1);
   run(mode);
   n = TIMER1_COUNT;
-  tick = ((unsigned int)n + 1) * 100 / 250;
-  if (tick < 1)
-    tick = 1;
+  tick = (((unsigned int)n + 1) * 100 + 249) / 250;   /* rounded up: a tick short and the count wraps */
   timer_set(tick * TICK10 - 1);
   run(mode);
   n = TIMER1_COUNT;
