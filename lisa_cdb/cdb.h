@@ -116,9 +116,11 @@ public:
 
     // where a stack local lives: entry_sp is the stack pointer at the
     // function's entry (before its sra), ra_saved whether it pushed RA.
-    // The caller's arguments sit above the return address, the locals
-    // below it.
-    static uint16_t local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved);
+    // The caller's arguments sit above the return address - above the
+    // slot it reserves for a result wider than two bytes or a struct
+    // (ret_slot bytes, see return_slot) - and the locals below it.
+    static uint16_t local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot = 0);
+    int return_slot(const CdbFunction& f) const;
 
     // a value as text: reads data bytes through rd, code-space constants
     // (the ldi/ret pairs of a code pointer) through rdcode (the instruction
@@ -136,6 +138,7 @@ public:
         std::string function;       // as CdbFunction::name
         uint16_t entry_sp = 0x7fff;
         bool ra_saved = false;
+        int ret_slot = 0;           // return_slot() of the function
         uint8_t a = 0;              // the register a byte argument arrives in
         bool a_valid = false;       // only in the innermost frame
     };
@@ -155,6 +158,40 @@ public:
     // a variable of the frame (a local, else a global) as a Value
     bool variable(const std::string& name, const Frame* frame, Value& out) const;
     std::string format_value(const Value& v, const ReadData& rd, const ReadData& rdperiph, const ReadCode& rdcode) const;
+
+    // ---- frames without a shadow call stack (the chip) ----
+    // What a function's prologue has done to SP by the time pc is reached:
+    // `sra` (2 bytes, RA saved) and `ads #-n` (its locals) are the whole of
+    // it, so at a statement boundary SP = entry SP - displacement.
+    struct Prologue { bool ra_saved = false; int displacement = 0; uint16_t end = 0; };
+    Prologue prologue(const CdbFunction& f, uint16_t pc, const ReadCode& rdcode) const;
+    // the bytes a caller pushes for f: its stack arguments and the result
+    // slot (popped after the call)
+    int arg_bytes(const CdbFunction& f) const;
+    // The frames from the registers: the return address is in RA until a
+    // function saves it (low byte at the entry SP, high byte below), the
+    // caller's SP at its statement boundary is the callee's entry SP plus
+    // the arguments.  Stops at code without a function.
+    struct StackFrame {
+        uint16_t pc;                    // frame 0: the PC; others: the return address into them
+        const CdbFunction* function;
+        uint16_t entry_sp;
+        bool ra_saved;
+        uint16_t ret_pc;                // where this frame returns to
+    };
+    std::vector<StackFrame> unwind(uint16_t pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max = 32) const;
+
+    // Where execution leaves the source line at pc, for a `next` that runs
+    // to breakpoints instead of stepping: the line starts reachable from pc
+    // without crossing another line start (a loop back to pc's own line
+    // included), with calls stepped over - or, with `into`, the first line
+    // of a callee that has lines - and ret_pc for a return out of the
+    // function (0 if unknown).  `unknown` is set when a jmp ix or an
+    // overlong scan leaves a path unaccounted for.
+    struct Exits { std::vector<uint16_t> stops; bool unknown = false; };
+    Exits line_exits(uint16_t pc, bool into, uint16_t ret_pc, const ReadCode& rdcode) const;
+    // the first line of a function past its prologue, 0 if it has none
+    uint16_t first_line_addr(const CdbFunction& f) const;
 
 private:
     bool loaded_ = false;

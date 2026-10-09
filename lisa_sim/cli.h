@@ -53,8 +53,13 @@ private:
     void cmd_finish();
     void cmd_print(const std::vector<std::string>& args);
     void cmd_locals();
-    void cmd_bt();
+    void cmd_bt(const std::vector<std::string>& args);
     void cmd_cdb(const std::vector<std::string>& args);
+    // the chip's way: frames unwound from the registers and the stack, a
+    // line left by running to breakpoints - checked here against the
+    // simulator's shadow call stack and stepping
+    void cmd_exits(bool into);
+    void cmd_nexthw(int mode);                  // 0 next, 1 into, 2 finish
 
     // Helpers
     std::vector<std::string> tokenize(const std::string& line);

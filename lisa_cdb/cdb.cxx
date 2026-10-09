@@ -60,7 +60,7 @@ CdbType CdbType::element() const {
     CdbType e = *this;
     if (!e.mods.empty()) {
         if (e.is_array() && array_len() > 0) e.size = size / array_len();
-        else if (e.is_pointer()) e.size = 0;    // unknown here: the base's size is used
+        else e.size = 0;                        // a pointer's or function's target: the base's size is used
         e.mods.erase(e.mods.begin());
     }
     return e;
@@ -457,12 +457,24 @@ const CdbStruct* Cdb::struct_named(const std::string& name) const {
     return nullptr;
 }
 
-uint16_t Cdb::local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved) {
-    // an argument (offset >= 0) was pushed by the caller: at entry_sp + 1 up;
-    // a local (offset < 0) lies below the return address the sra pushed
+uint16_t Cdb::local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot) {
+    // an argument (offset >= 0) was pushed by the caller: at entry_sp + 1
+    // up, past the result slot; a local (offset < 0) lies below the return
+    // address the sra pushed
     int a = (int)entry_sp + 1 + s.offset;
-    if (s.offset < 0 && ra_saved) a -= 2;
+    if (s.offset >= 0) a += ret_slot;
+    else if (ra_saved) a -= 2;
     return (uint16_t)(a & 0x7fff);
+}
+
+// A byte comes back in A, two bytes (int, a pointer) in IX; anything wider
+// or a struct in a slot the caller reserves just above the return address.
+int Cdb::return_slot(const CdbFunction& f) const {
+    if (!f.type.is_function()) return 0;
+    CdbType r = f.type.element();
+    if (r.is_pointer() || r.base == "SV") return 0;
+    int n = type_size(r);
+    return (r.base.rfind("ST", 0) == 0 || n > 2) ? n : 0;
 }
 
 // ---- values ----------------------------------------------------------
@@ -605,7 +617,7 @@ bool Cdb::variable(const std::string& name, const Frame* frame, Value& out) cons
     out.space = sym->space;
     if (sym->space == 'B') {
         if (!frame) return false;
-        out.addr = local_address(*sym, frame->entry_sp, frame->ra_saved);
+        out.addr = local_address(*sym, frame->entry_sp, frame->ra_saved, frame->ret_slot);
         out.is_lvalue = true;
     } else if (sym->space == 'R') {
         if (!frame || !frame->a_valid) return false;
@@ -767,6 +779,129 @@ std::string Cdb::format_value(const Value& v, const ReadData& rd, const ReadData
         return buf;
     }
     return format(v.type, (uint16_t)v.addr, v.in_code, rd, rdcode);
+}
+
+// ---- frames from the registers ---------------------------------------
+
+static int sext10(uint16_t v) { return (v & 0x200) ? (int)(v & 0x3ff) - 0x400 : (int)(v & 0x3ff); }
+
+Cdb::Prologue Cdb::prologue(const CdbFunction& f, uint16_t pc, const ReadCode& rdcode) const {
+    Prologue p;
+    p.end = f.addr;
+    if (!rdcode || !f.has_addr) return p;
+    uint16_t a = f.addr;
+    for (int i = 0; i < 8; i++, a++) {                  // sra, then the ads of the locals (two for a big frame)
+        uint16_t inst = rdcode(a);
+        bool is_sra = (inst & 0xfffc) == 0xa160;
+        bool is_ads = (inst >> 10) == 0x25 && sext10(inst) < 0;
+        if (!is_sra && !is_ads) break;
+        p.end = a + 1;
+        if (a >= pc) continue;                           // not executed yet
+        if (is_sra) { p.ra_saved = true; p.displacement += 2; }
+        else p.displacement -= sext10(inst);
+    }
+    return p;
+}
+
+int Cdb::arg_bytes(const CdbFunction& f) const {
+    int n = 0;
+    for (const CdbSymbol* s : locals(f.name))
+        if (s->space == 'B' && s->offset >= 0) n = std::max(n, s->offset + type_size(s->type));
+    return n + return_slot(f);
+}
+
+std::vector<Cdb::StackFrame> Cdb::unwind(uint16_t pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max) const {
+    std::vector<StackFrame> out;
+    const CdbFunction* f = function_at(pc);
+    uint16_t cur_pc = pc, cur_sp = sp;
+    for (int depth = 0; f && depth < max; depth++) {
+        Prologue p = prologue(*f, depth == 0 ? cur_pc : (uint16_t)(f->end ? f->end : 0x7fff), rdcode);
+        StackFrame fr;
+        fr.pc = cur_pc;
+        fr.function = f;
+        fr.entry_sp = (uint16_t)((cur_sp + p.displacement) & 0x7fff);
+        fr.ra_saved = p.ra_saved;
+        if (p.ra_saved) {
+            if (!rd) break;
+            fr.ret_pc = (uint16_t)(rd(fr.entry_sp) | ((rd((uint16_t)(fr.entry_sp - 1)) & 0x7f) << 8));
+        } else if (depth == 0) {
+            fr.ret_pc = ra & 0x7fff;
+        } else {
+            fr.ret_pc = 0;                               // a caller that never saved RA: the walk ends
+            out.push_back(fr);
+            break;
+        }
+        out.push_back(fr);
+        const CdbFunction* caller = function_at((uint16_t)(fr.ret_pc - 1));
+        if (!caller || fr.ret_pc == 0) break;
+        uint16_t caller_sp = (uint16_t)((fr.entry_sp + arg_bytes(*f)) & 0x7fff);
+        if (caller_sp <= cur_sp && depth > 0) break;     // the stack must grow back up
+        cur_pc = fr.ret_pc;
+        cur_sp = caller_sp;
+        f = caller;
+    }
+    return out;
+}
+
+// ---- where a line is left ----------------------------------------------
+
+uint16_t Cdb::first_line_addr(const CdbFunction& f) const {
+    if (!f.has_addr) return 0;
+    for (const CdbLine& l : lines_)
+        if (l.addr >= f.addr && (!f.has_end || l.addr < f.end)) return l.addr;
+    return 0;
+}
+
+Cdb::Exits Cdb::line_exits(uint16_t pc, bool into, uint16_t ret_pc, const ReadCode& rdcode) const {
+    Exits ex;
+    std::set<uint16_t> stops, seen;
+    std::vector<uint16_t> todo{pc};
+    const CdbLine* l0 = line_at(pc);
+    auto stop_at = [&](uint16_t a) { stops.insert(a); };
+    // a successor: a line start stops there (pc's own line again means a
+    // loop back), anything else is scanned on
+    auto succ = [&](uint16_t a) {
+        a &= 0x7fff;
+        if (a == pc) { stop_at(a); return; }
+        const CdbLine* l = line_starting(a);
+        if (l && (!l0 || l->line != l0->line || l->file != l0->file || a < pc)) { stop_at(a); return; }
+        if (!seen.count(a)) todo.push_back(a);
+    };
+    while (!todo.empty()) {
+        uint16_t a = todo.back();
+        todo.pop_back();
+        if (seen.count(a)) continue;
+        seen.insert(a);
+        if (seen.size() > 4000) { ex.unknown = true; break; }
+        uint16_t op = rdcode(a);
+        uint16_t seq = (a + 1) & 0x7fff;
+        int rel = ((int)(op & 0x7ff) << 21) >> 21;        // sign-extended inst[10:0]
+        if (!(op & 0x8000)) {                                // jal
+            const CdbFunction* callee = into ? function_at(op & 0x7fff) : nullptr;
+            uint16_t first = callee && callee->addr == (op & 0x7fff) ? first_line_addr(*callee) : 0;
+            if (first) stop_at(first);
+            succ(seq);                                       // after the return
+            continue;
+        }
+        uint16_t t5 = op >> 11, t6 = op >> 10, t9 = op >> 7, t10 = op >> 6, t11 = op >> 5;
+        if (t5 == 0x16) { succ((uint16_t)(a + rel)); continue; }                    // br
+        if (t5 == 0x15 || t5 == 0x17) { succ((uint16_t)(a + rel)); succ(seq); continue; }   // bnz / bz
+        if (t6 == 0x23 || t9 == 0x114) { if (ret_pc) stop_at(ret_pc); else ex.unknown = true; continue; }   // ret #k / ret
+        if (t10 == 0x22c || t10 == 0x22e) { if (ret_pc) stop_at(ret_pc); else ex.unknown = true; succ(seq); continue; }   // rc / rz
+        if (t10 == 0x22d) { ex.unknown = true; continue; }                           // rets
+        if (t11 == 0x454) { succ(seq); continue; }                                   // call ix: back at the next word
+        if (t11 == 0x455) { ex.unknown = true; continue; }                           // jmp ix
+        if ((op >> 4) == 0xa18) { succ((uint16_t)(a + 2)); continue; }               // ldx: the next word is its operand
+        if ((op >> 8) == 0xa2) {                                                     // if / iftt / ifte: a skipped slot falls through
+            int type = (op >> 3) & 3;
+            if (type == 0 || type == 3) succ((uint16_t)(a + 2));
+            else if (type == 1) succ((uint16_t)(a + 3));
+            else { succ((uint16_t)(a + 2)); succ((uint16_t)(a + 3)); }
+        }
+        succ(seq);
+    }
+    ex.stops.assign(stops.begin(), stops.end());
+    return ex;
 }
 
 std::string Cdb::print(const std::string& expr, const Frame* frame, std::string* err,
