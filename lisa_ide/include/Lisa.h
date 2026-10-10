@@ -227,6 +227,7 @@ private:
     int                 ParseFile(lisa_src_t *pSrc, char *filename);
     int                 IsObjectFile(lisa_src_t *pSrc);
     int                 OpenFromListFile(lisa_src_t *pSrc, char *line, int maxlen);
+    int                 OpenFromSdccListing(lisa_src_t *pSrc, char *line, int maxlen);
     char *              GetLineToken(char *pLine, int col, int& syntax);
     void                AppendWS(char *pLine);
     void                CloseTab(CTab *pTab);

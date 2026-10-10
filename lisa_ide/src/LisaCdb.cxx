@@ -638,9 +638,27 @@ int CLisa::Debug(int argc, char* argv[])
     Printf("%s: %zu words; %s: %zu functions, %zu lines", path.c_str(), words.size(),
            m_Cdb.path().c_str(), m_Cdb.functions().size(), m_Cdb.lines().size());
 
-    // the sources, each in a tab
+    // the linked listing beside the image (sdcc writes <base>.rst): the
+    // assembly view, attached so the PC arrow follows it too
     for (lisa_src_t *pSrc = m_pSrcs; pSrc; pSrc = pSrc->pNext)
         pSrc->cdb_file[0] = 0;
+    std::string rst = base + ".rst";
+    if (FILE *f = fopen(rst.c_str(), "r"))
+    {
+        fclose(f);
+        char *av[2] = { (char *) "open", (char *) rst.c_str() };
+        if (Open(2, av) == OK)
+            for (lisa_src_t *pSrc = m_pSrcs; pSrc; pSrc = pSrc->pNext)
+                if (strcmp(pSrc->name, rst.c_str()) == 0 && pSrc->type == LISA_SRC_TYPE_LIST)
+                {
+                    for (lisa_src_t *q = m_pSrcs; q; q = q->pNext)
+                        q->attached = 0;
+                    pSrc->attached = 1;
+                    m_pAttachedSrc = pSrc;
+                }
+    }
+
+    // the sources, each in a tab
     for (const std::string& f : m_Cdb.files())
     {
         std::string p = m_Cdb.source_path(f);

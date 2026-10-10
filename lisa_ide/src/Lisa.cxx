@@ -32,7 +32,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"write",   2, 2, &CLisa::Write,   "addr value",    "Write LISA register"},
     {"reset",   0, 0, &CLisa::Reset,   "",              "Reset the LISA Core"},
     {"term",    0, 0, &CLisa::Term,    "",              "Enable the LISA Terminal"},
-    {"open",    1, 1, &CLisa::Open,    "filename",      "Open a file for view in a tab"},
+    {"open",    1, 1, &CLisa::Open,    "filename",      "Open a file in a tab (.c, .S, a .rst/.lst listing, a hex object)"},
     {"connect", 1, 2, &CLisa::Connect, "<port> [baud]", "Connect to the board (its USB serial port)"},
     {"sp",      0, 0, &CLisa::SP,      "",              "Report current SP value"},
     {"pc",      0, 0, &CLisa::PC,      "",              "Report current PC value"},
@@ -2584,6 +2584,79 @@ int CLisa::OpenFromListFile(lisa_src_t *pSrc, char *line, int maxlen)
 
 /*
 ==============================================================================
+An SDCC listing (sdaslisa): "      00015C 10 F6   460 \tlda ..." - a byte
+address at column 6 and the instruction's bytes in memory order (a two-word
+ldx on one line); a label has the address and no bytes; symbol values sit
+further right.  The .rst's addresses are the linked ones, so PC = address
+/ 2; a .lst's are offsets within each area of the module.  Only the code
+areas map to PCs.  Returns the number of lines mapped.
+==============================================================================
+*/
+int CLisa::OpenFromSdccListing(lisa_src_t *pSrc, char *line, int maxlen)
+{
+    FILE        *fd = pSrc->fd;
+    int         lineno = 0;
+    int         mapped = 0;
+    bool        code = true;
+
+    pSrc->sourceLineCount = 0;
+    pSrc->lineStarts[0] = 0;
+    pSrc->pProgram = (lisa_program_t *) calloc(1, sizeof(lisa_program_t));
+    if (pSrc->pProgram == NULL)
+        return 0;
+
+    while (fgets(line, maxlen, fd) != NULL)
+    {
+        lineno++;
+        if (lineno >= 90000)
+            break;
+        pSrc->sourceLineCount++;
+        pSrc->lineStarts[pSrc->sourceLineCount] = ftell(fd);
+        pSrc->lineAddrs[lineno-1] = -1;
+
+        const char *area = strstr(line, ".area ");
+        if (area)
+        {
+            char name[32] = "";
+            sscanf(area + 6, "%31s", name);
+            code = !strcmp(name, "CODE") || !strcmp(name, "HOME") || !strcmp(name, "GSINIT") ||
+                   !strcmp(name, "GSFINAL") || !strcmp(name, "CONST") || !strcmp(name, "CABS");
+            continue;
+        }
+        if (!code || strncmp(line, "      ", 6) != 0 || strlen(line) < 18)
+            continue;
+        if (!isxdigit((unsigned char) line[6]) || !isxdigit((unsigned char) line[11]) || line[12] != ' ' ||
+            !isxdigit((unsigned char) line[13]) || !isxdigit((unsigned char) line[14]) || line[15] != ' ' ||
+            !isxdigit((unsigned char) line[16]) || !isxdigit((unsigned char) line[17]))
+            continue;
+        unsigned addr = strtoul(std::string(line + 6, 6).c_str(), NULL, 16);
+        unsigned b0 = strtoul(std::string(line + 13, 2).c_str(), NULL, 16);
+        unsigned b1 = strtoul(std::string(line + 16, 2).c_str(), NULL, 16);
+        int pc = addr / 2;
+        if (pc >= 32768)
+            continue;
+        pSrc->lineAddrs[lineno-1] = pc;
+        pSrc->pProgram->m_Program[pc] = b0 | (b1 << 8);
+        pSrc->pProgram->m_LstLine[pc] = lineno;
+        if (pc > pSrc->pProgram->m_Size)
+            pSrc->pProgram->m_Size = pc;
+        mapped++;
+        // a second word on the line (ldx and its operand)
+        if (strlen(line) >= 24 && line[18] == ' ' && isxdigit((unsigned char) line[19]) && isxdigit((unsigned char) line[20]) &&
+            line[21] == ' ' && isxdigit((unsigned char) line[22]) && isxdigit((unsigned char) line[23]) && pc + 1 < 32768)
+        {
+            unsigned b2 = strtoul(std::string(line + 19, 2).c_str(), NULL, 16);
+            unsigned b3 = strtoul(std::string(line + 22, 2).c_str(), NULL, 16);
+            pSrc->pProgram->m_Program[pc + 1] = b2 | (b3 << 8);
+            if (pc + 1 > pSrc->pProgram->m_Size)
+                pSrc->pProgram->m_Size = pc + 1;
+        }
+    }
+    return mapped;
+}
+
+/*
+==============================================================================
 Determine if file is object type
 ==============================================================================
 */
@@ -2708,7 +2781,8 @@ int CLisa::ParseFile(lisa_src_t *pSrc, char *filename)
     strncpy(pSrc->filename, filename, sizeof(pSrc->filename) - 1);
     pSrc->filename[sizeof(pSrc->filename) - 1] = 0;
     len = strlen(filename);
-    if (len > 4 && strcmp(&filename[len-4], ".lst") == 0)
+    bool sdcc_rst = len > 4 && strcmp(&filename[len-4], ".rst") == 0;
+    if (len > 4 && (strcmp(&filename[len-4], ".lst") == 0 || sdcc_rst))
     {
         // Open the new file for use
         close(fd);
@@ -2717,14 +2791,27 @@ int CLisa::ParseFile(lisa_src_t *pSrc, char *filename)
             Printf("Unable to open file");
             return -1;
         }
-        ret = OpenFromListFile(pSrc, line, sizeof(line));
+        // lisa_as's listing, else SDCC's (sdaslisa: .lst unrelocated, .rst linked)
+        ret = sdcc_rst ? 0 : OpenFromListFile(pSrc, line, sizeof(line));
         if (ret)
-        {
             Printf("Program size: %d opcodes", pSrc->pProgram->m_Size);
-            pSrc->type = LISA_SRC_TYPE_LIST;
-        }
         else
-            pSrc->type = LISA_SRC_TYPE_OTHER;
+        {
+            rewind(pSrc->fd);
+            if (pSrc->pProgram)
+            {
+                free(pSrc->pProgram);
+                pSrc->pProgram = NULL;
+            }
+            int mapped = OpenFromSdccListing(pSrc, line, sizeof(line));
+            if (mapped)
+            {
+                ret = 1;
+                Printf("SDCC listing: %d lines of code%s", mapped, sdcc_rst ? " at their linked addresses (PC = address / 2)" :
+                       "; a .lst's addresses are offsets within the module - open the .rst for the linked ones");
+            }
+        }
+        pSrc->type = ret ? LISA_SRC_TYPE_LIST : LISA_SRC_TYPE_OTHER;
         return OK;
     }
   

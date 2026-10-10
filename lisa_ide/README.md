@@ -81,8 +81,17 @@ for the cache are built with `sdcc --tt07-cache`.
 
 `debug prog.ihx` loads the image (the code words are then read from it,
 not over the UART) and `prog.cdb` beside it, opens each source the `.cdb`
-names in a tab (the arrow marks the PC's line, `*` a breakpoint's), and
-warns if the flash does not hold the image.  The reader is
+names in a tab (the arrow marks the PC's line, `*` a breakpoint's), opens
+`prog.rst` - the linked assembly listing - as a tab with the arrow too, and
+warns if the flash does not hold the image.
+
+SDCC's listings use byte addresses (its linker works in bytes; a LISA word
+is two bytes), so PC = listing address / 2, and the bytes are printed in
+memory order (opcode 0xF610 appears as `10 F6`). `prog.rst` has the
+linked addresses; `prog.lst` is the assembler's output before linking,
+whose addresses are offsets within each area of the module (the map says
+where the linker put the area: the monitor's CODE at 0xEC, so its `.lst`
+offset 0x70 is PC 0xAE). `open` understands both, and says so for a `.lst`.  The reader is
 `../lisa_cdb` (`cdb.h`, `image.h`), shared with `lisa_sim`.
 
 The chip has four hardware breakpoints and no shadow call stack, and a
