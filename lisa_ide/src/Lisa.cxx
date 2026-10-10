@@ -47,6 +47,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"bt",      0, 0, &CLisa::Backtrace, "",            "Backtrace"},
     {"where",   0, 0, &CLisa::Where,   "",              "The source line at PC"},
     {"setup",   0, 1, &CLisa::Setup,   "[apply|defaults]", "The SETUP tab: chip selects, bases, SPI/QSPI, cache, muxes"},
+    {"spiram",  1, 1, &CLisa::SpiRam,  "on|off",        "The data cache on the RP2040's emulated SPI RAM (CS1), or off"},
     {"help",    0, 1, &CLisa::Help,    "[command]",     "List the commands, or explain one"},
     {nullptr,   0, 0, nullptr,         nullptr,         nullptr}
 };
@@ -2017,6 +2018,15 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  each back and keeps them: connect applies them from then on (saved in\n"
                 "  .tui_prefs). `setup apply` writes the kept settings again (after a\n"
                 "  project reset); `setup defaults` goes back to the defaults."},
+    {"spiram",  "spiram on|off\n"
+                "  on: the data cache on the demo board's RP2040, which emulates a 32K SPI RAM\n"
+                "  on CE1 (needs the lisa_spi_ram MicroPython build - the LISA Commander\n"
+                "  offers to flash it). Sets the LISA Commander's known-good settings - CE1 on\n"
+                "  uio[4], CS1 a 16-bit SPI RAM, SPI mode 3, CE delay 127, SCLK /1 - starts\n"
+                "  the emulation, checks it with a pattern, then turns the cache on; kept, so\n"
+                "  connect does it again. Programs must be built for it (sdcc --tt07-cache).\n"
+                "  off: the cache off (the 128-byte RAM), the other settings kept.\n"
+                "  The SETUP tab's cache on/off does the same with its own settings."},
     {"debug",   "debug <prog.ihx>\n"
                 "  Loads the program image and the .cdb that `sdcc -mlisa --debug` writes\n"
                 "  beside it, opens each C source in a tab (-> marks the PC's line, * a\n"

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <unistd.h>
 
 extern int gLastWasCtrlC;
 
@@ -96,6 +97,10 @@ std::string LisaSetupCfg::Validate(void) const
     if (!is_flash[lisa1_cs]) return "program fetch needs a flash on its chip select";
     if (cache_on && is_flash[lisa2_cs]) return "the data cache needs a RAM on its chip select (Device: RAM)";
     if (cache_on && lisa2_cs == lisa1_cs) return "the data cache and program fetch share a chip select";
+    // CE1 reaches the RAM on uio[4] only with uio mux bits 1:0 = 3; without
+    // it the RP2040's emulator sees its select active and drives MISO,
+    // which the flash shares: every flash read then returns 0 (seen)
+    if (cache_on && lisa2_cs == 1 && (io_mux & 3) != 3) return "the data cache on CS1 needs CE1 on uio[4]: uio mux bits 1:0 = 3 (0x03)";
     return "";
 }
 
@@ -154,13 +159,94 @@ void CLisa::SetDebugAddress(uint32_t byteAddr)
     WriteReg(0x10, byteAddr & 0xffff);
 }
 
+// A line of Python on the RP2040 through uartPass.py's sideband: a NUL,
+// the line, a newline; its output comes back between two NULs.
+bool CLisa::Sideband(const char *line, std::string& out, int timeoutMs)
+{
+    char    ch;
+    int     nuls = 0;
+
+    out.clear();
+    m_Access.Acquire();
+    ser_write_byte(m_pSer, 0);
+    for (const char *p = line; *p; p++)
+        ser_write_byte(m_pSer, *p);
+    ser_write_byte(m_pSer, '\n');
+    for (int t = 0; t < timeoutMs && nuls < 2; )
+    {
+        ser_poll(m_pSer);
+        bool got = false;
+        while (nuls < 2 && ser_read_byte(m_pSer, &ch) == SER_NO_ERROR)
+        {
+            got = true;
+            if (ch == 0)
+                nuls++;
+            else if (nuls == 1)
+                out += ch;
+        }
+        if (!got)
+        {
+            usleep(2000);
+            t += 2;
+        }
+    }
+    m_Access.Release();
+    return nuls == 2;
+}
+
+// The data cache's RAM on the demo board: the RP2040 emulates a 32K SPI
+// RAM on CE1 (the lisa_spi_ram MicroPython build, rp2.enable_sim_spi_ram).
+// Start it, then check it with a pattern written and read through the
+// debugger on the cache's chip select.
+bool CLisa::EnableSpiRam(const LisaSetupCfg& cfg, std::string& why)
+{
+    std::string out;
+    uint32_t    v;
+    static const uint16_t pat[] = { 0x1234, 0xa55a, 0x0000, 0xffff, 0x8001, 0x7ffe };
+
+    if (!Sideband("import rp2; print('@ok=%d' % rp2.enable_sim_spi_ram())", out, 3000))
+    {
+        why = "the board does not answer the sideband (uartPass.py)";
+        return false;
+    }
+    if (out.find("@ok=1") == std::string::npos)
+    {
+        why = "no SPI RAM emulation on the RP2040 (" + out.substr(0, out.find_first_of("\r\n")) +
+              "): it needs the lisa_spi_ram MicroPython build - the LISA Commander offers to flash it";
+        return false;
+    }
+    WriteReg(0x16, 1 << cfg.lisa2_cs);                         // the debugger onto the RAM
+    SetDebugAddress(0x1000);
+    for (uint16_t w : pat)
+    {
+        char cmd[16];
+        snprintf(cmd, sizeof cmd, "w20%04x\n", w);
+        WriteUartString(cmd);
+    }
+    SetDebugAddress(0x1000);
+    bool ok = true;
+    for (uint16_t w : pat)
+        if (Exchange("r20\n", v) != 0 || (uint16_t) v != w)
+            ok = false;
+    WriteReg(0x16, 1 << cfg.dbg_cs);                           // and back
+    SetDebugAddress(cfg.lisa1_base);
+    if (!ok)
+        why = "the SPI RAM does not hold a test pattern: check CS" + std::to_string(cfg.lisa2_cs) +
+              " (RAM, SPI, 16-bit), the uio mux (0x03: CE1 on uio[4]) and the SPI timing";
+    return ok;
+}
+
 // Write the registers, read each back (the cache register's invalidate
-// bits clear themselves: only its low three bits are compared)
-int CLisa::ApplySetup(const LisaSetupCfg& cfg, std::string *pReport)
+// bits clear themselves: only its low three bits are compared).  With the
+// data cache on, its RAM is started and checked first, and the cache
+// turned on last; if the RAM fails the cache stays off.
+int CLisa::ApplySetup(const LisaSetupCfg& want, std::string *pReport)
 {
     std::string bad;
     uint32_t    v;
+    LisaSetupCfg cfg = want;
 
+    cfg.cache_on = 0;
     for (const auto& rv : cfg.Registers())
         WriteReg(rv.first, rv.second);
     SetDebugAddress(cfg.lisa1_base);
@@ -174,10 +260,76 @@ int CLisa::ApplySetup(const LisaSetupCfg& cfg, std::string *pReport)
             bad += b;
         }
     }
-    m_Setup = cfg;
+    std::string invalid = want.Validate();
+    if (want.cache_on && !invalid.empty())
+        bad = "data cache left off: " + invalid;
+    else if (want.cache_on && bad.empty())
+    {
+        std::string why;
+        if (EnableSpiRam(want, why))
+        {
+            WriteReg(0x1d, 0x10 | (want.cache_map & 3));        // invalidate it, cache on
+            if (ReadReg(0x1d, v) == -1 || (v & 7) != (uint32_t) (want.cache_map & 3))
+                bad = "the data cache did not come on";
+            else
+            {
+                cfg.cache_on = 1;
+                Printf("data cache on: the RP2040's SPI RAM on CS%d, checked with a pattern", want.lisa2_cs);
+            }
+        }
+        else
+            bad = "data cache left off: " + why;
+    }
+    m_Setup = want;                     // kept as asked, applied again on connect
     if (pReport)
         *pReport = bad;
     return bad.empty() ? 0 : -1;
+}
+
+// spiram on: the LISA Commander's known-good settings for the data cache on
+// the RP2040's SPI RAM (CE1 on uio[4], CS1 a 16-bit SPI RAM, SPI mode 3,
+// CE delay 127, SCLK /1 - slower settings garble the emulator), applied
+// and kept; spiram off: the cache off, the rest kept
+int CLisa::SpiRam(int argc, char* argv[])
+{
+    LisaSetupCfg c = m_Setup;
+
+    if (argc < 2 || (strcmp(argv[1], "on") && strcmp(argv[1], "off")))
+    {
+        Printf("Usage: spiram on|off   (data cache %s in the kept settings)", m_Setup.cache_on ? "on" : "off");
+        return 1;
+    }
+    if (strcmp(argv[1], "on") == 0)
+    {
+        c.io_mux = (c.io_mux & ~0x03) | 0x03;
+        c.lisa2_cs = 1;
+        c.is_flash[1] = 0; c.quad[1] = 0; c.addr16[1] = 1;
+        c.spi_mode = 3; c.ce_delay = 0x7f; c.sclk_div = 1;
+        c.cache_on = 1; c.cache_map = 3;
+    }
+    else
+        c.cache_on = 0;
+    std::string err = c.Validate();
+    if (!err.empty())
+    {
+        Printf("%s (see setup)", err.c_str());
+        return 1;
+    }
+    if (!m_Connected)
+    {
+        m_Setup = c;
+        m_pParent->WriteUIPreferences();
+        Printf("kept: applied on connect");
+        return 0;
+    }
+    std::string bad;
+    int ret = ApplySetup(c, &bad);
+    if (ret != 0)
+        Printf("%s", bad.c_str());
+    else if (!c.cache_on)
+        Printf("data cache off: the 128-byte RAM is the data space");
+    m_pParent->WriteUIPreferences();
+    return ret == 0 ? 0 : 1;
 }
 
 // connect's setup: the saved settings (the defaults until the tab is used)
@@ -195,10 +347,6 @@ int CLisa::SetupDebugger(uint32_t flashBase)
     }
     Printf("debugger registers set up (program fetch CS%d at 0x%06x, data cache %s; `setup` to change)",
            cfg.lisa1_cs, cfg.lisa1_base, cfg.cache_on ? "on" : "off");
-    if (cfg.cache_on)
-        Printf("note: with the data cache on, data lives in the RAM on CS%d - on the demo board the RP2040's "
-               "SPI RAM emulation (the LISA Commander starts it); programs for the 128-byte RAM fail without it",
-               cfg.lisa2_cs);
     return 0;
 }
 
@@ -554,8 +702,7 @@ int CLisa::SetupKey(int key)
                            c.lisa1_cs, c.lisa1_base, c.cache_on ? "on" : "off", c.lisa2_cs, c.ttlc_cs, c.ttlc_base);
                 else
                     Printf("setup written, but %s", bad.c_str());
-                if (c.cache_on)
-                    Printf("note: the data cache needs the RAM on CS%d (the RP2040's SPI RAM emulation on the demo board)", c.lisa2_cs);
+
             }
             m_pParent->WriteUIPreferences();                // keep it
             CloseSetupTab();

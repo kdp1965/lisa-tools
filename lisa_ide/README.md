@@ -61,9 +61,21 @@ writes the registers, reads each back, and keeps the settings: `connect`
 applies them from then on, and they are saved in `.tui_prefs`. **Cancel**
 drops the edits; **Read from chip** and **Defaults** reload the form.
 `setup apply` writes the kept settings again (after a project reset),
-`setup defaults` goes back to the defaults. Turning the data cache on
-needs a RAM on its chip select - on the demo board the RP2040's SPI RAM
-emulation, which the LISA Commander starts.
+`setup defaults` goes back to the defaults.
+
+**The data cache on the demo board** needs the RP2040's SPI RAM emulation
+(the `lisa_spi_ram` MicroPython build; the LISA Commander offers to flash
+it). `spiram on` sets the Commander's known-good settings (CE1 on
+`uio[4]`, CS1 a 16-bit SPI RAM, SPI mode 3, CE delay 127, SCLK /1), starts
+the emulation with a line of Python through `uartPass.py`'s sideband,
+checks the RAM with a pattern through the debugger, and only then turns
+the cache on; `spiram off` turns it off. The settings are kept, so
+`connect` does the same again; the SETUP tab's cache on/off goes through
+the same steps with its own settings. If the RAM fails the check the
+cache stays off. With the cache on CS1, CE1 must be on `uio[4]` (uio mux
+bits 1:0 = 3): otherwise the emulator sees its select active and drives
+MISO, which the flash shares, and every flash read returns 0. Programs
+for the cache are built with `sdcc --tt07-cache`.
 
 ## Source level (`src/LisaCdb.cxx`)
 

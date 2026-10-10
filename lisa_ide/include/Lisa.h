@@ -180,6 +180,9 @@ private:
     // the SETUP tab (LisaSetup.cxx)
     int                 ApplySetup(const LisaSetupCfg& cfg, std::string *pReport = NULL);
     bool                ReadSetup(LisaSetupCfg& cfg);
+    bool                Sideband(const char *line, std::string& out, int timeoutMs);
+    bool                EnableSpiRam(const LisaSetupCfg& cfg, std::string& why);
+    int                 SpiRam(int argc, char* argv[]);
     void                OpenSetupTab(void);
     void                CloseSetupTab(void);
     bool                IsSetupTab(void);
