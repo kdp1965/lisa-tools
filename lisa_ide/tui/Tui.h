@@ -126,6 +126,7 @@ class CTui : public CThread
     void          SelectTab(int which);
     void          MakeTabActive(CTab *pTab);
     void          FocusTabs(void);
+    void          FocusCommand(void);
     int           SetSourceFocus(void);
 
   /* Methods called only from the CursesThread */

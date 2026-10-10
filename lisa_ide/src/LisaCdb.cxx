@@ -67,7 +67,7 @@ uint16_t CLisa::CodeWord(uint16_t pc)
     pc &= 0x7fff;
     if (pc < m_Program.size())
         return m_Program[pc];
-    WriteReg(0x10, pc * 2);
+    SetDebugAddress(m_Setup.lisa1_base + pc * 2);
     ReadReg(0x20, v);
     return (uint16_t) v;
 }
@@ -413,53 +413,6 @@ int CLisa::RunToStops(const std::vector<uint16_t>& wanted, int timeoutMs)
     return ReadReg(REG_PC, pc) == -1 ? -1 : logical(pc);
 }
 
-// The debug registers after a project reset leave the data cache on (the
-// data space is then an SPI RAM that is not there) and the debugger's
-// flash port misclocked: the registers lisa_pydb's loadFlash()/noCache()
-// and the Commander's setup() write, each read back.
-int CLisa::SetupDebugger(uint32_t flashBase)
-{
-    static const struct { uint8_t reg; uint16_t val; } regs[] =
-    {
-        { 0x11, 0 },        // debug QSPI address, MSB (flashBase >> 16 below)
-        { 0x12, 0 },        // LISA1 (instruction fetch) base address
-        { 0x10, 0 },        // debug QSPI address, LSB
-        { 0x1c, 0x0000 },   // uio mux: plain SPI pins
-        { 0x1b, 0x5455 },   // uo_out mux: LISA PortB outputs
-        { 0x17, 0x0004 },   // CE0: single SPI, flash, 24-bit addresses
-        { 0x1e, 0x08d3 },   // SPI mode 1, SCLK divider 3, 13 clocks between CE activations
-        { 0x1d, 0x0007 },   // data cache off: the 128-byte RAM is the data space
-    };
-    uint32_t    v;
-    int         bad = 0;
-
-    for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++)
-    {
-        uint16_t val = regs[i].reg == 0x11 ? (flashBase >> 16) : regs[i].reg == 0x12 ? (flashBase >> 8) :
-                       regs[i].reg == 0x10 ? (flashBase & 0xffff) : regs[i].val;
-        WriteReg(regs[i].reg, val);
-    }
-    for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++)
-    {
-        uint16_t val = regs[i].reg == 0x11 ? (flashBase >> 16) : regs[i].reg == 0x12 ? (flashBase >> 8) :
-                       regs[i].reg == 0x10 ? (flashBase & 0xffff) : regs[i].val;
-        if (ReadReg(regs[i].reg, v) == -1 || (uint16_t) v != val)
-        {
-            Printf("register 0x%02x reads back 0x%04x, expected 0x%04x", regs[i].reg, v, val);
-            bad++;
-        }
-    }
-    if (!bad)
-        Printf("debugger registers set up (flash base 0x%06x, data cache off)", flashBase);
-    return bad ? -1 : 0;
-}
-
-int CLisa::Setup(int argc, char* argv[])
-{
-    if (!m_Connected)
-        return 1;
-    return SetupDebugger(argc > 1 ? strtoul(argv[1], NULL, 0) : 0);
-}
 
 /*
 ==============================================================================
@@ -713,7 +666,7 @@ int CLisa::Debug(int argc, char* argv[])
         for (int i = 0; i < 4 && at + i < words.size(); i++)
         {
             uint32_t v = 0;
-            WriteReg(0x10, (at + i) * 2);
+            SetDebugAddress(m_Setup.lisa1_base + (at + i) * 2);
             if (ReadReg(0x20, v) == -1 || (uint16_t) v != words[at + i])
                 bad++;
         }

@@ -936,6 +936,10 @@ int CTui::ProcessInput(char* pBuffer, int &index, int maxSize)
     doupdate();
   }
 
+  // A source that takes every key while its tab has the focus (a form)
+  if (m_Focus == FOCUS_SRC && m_pSrc && m_pSrc->WantAllKeys() && m_pSrc->ProcessKey(key))
+    return -1;
+
   // Test if key processed as special mode key
   if ((ret = ProcessAsSpecialModeKey(key, pBuffer, maxSize, index)))
   {
@@ -1661,6 +1665,26 @@ void CTui::FocusTabs(void)
     m_pFocuswin = m_pTabs->GetActiveTab()->GetWindow();
   m_NeedUpdate = 0;
 
+  doupdate();
+  curs_set(1);
+  m_CursesLock.Release();
+}
+
+/*
+===================================================================================
+Give the focus back to the command window (a form tab closing)
+===================================================================================
+*/
+void CTui::FocusCommand(void)
+{
+  m_CursesLock.Acquire();
+  m_pTabs->SetFocus(0);
+  m_Focus = FOCUS_CMD;
+  m_pTabs->Redraw();
+  DrawSourceWindow();
+  m_pFocuswin = m_pCmdwin;
+  wmove(m_pCmdwin, m_CursorLine, m_CmdCol);
+  wnoutrefresh(m_pCmdwin);
   doupdate();
   curs_set(1);
   m_CursesLock.Release();

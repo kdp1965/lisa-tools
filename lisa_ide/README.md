@@ -22,7 +22,33 @@ object or C file in a tab), `attach` (a listing/object tab as the running
 program), `break`/`delete`/`br`, `run`/`halt`/`stop`, `step` (one
 instruction, the chip's step bit), `set reg=val`, `read`/`write` (debugger
 registers), `reset`, `term`, `ls`, `sp`, `pc`, and the source level: `debug`,
-`next`/`n`, `into`, `finish`, `print`/`p`, `locals`, `bt`, `where`.
+`next`/`n`, `into`, `finish`, `print`/`p`, `locals`, `bt`, `where`, and
+`setup` (the SETUP tab).
+
+## The SETUP tab (`src/LisaSetup.cxx`)
+
+`setup` opens a form over the debugger's configuration registers
+(`debug_regs.v`), read from the chip when connected:
+
+* program fetch (LISA1), the data cache (LISA2) and the TTLC: chip select
+  and base address (bytes; the registers 0x12/0x13/0x1f hold them >> 8);
+  the debugger's flash port: chip select (0x14–0x16)
+* per chip select: flash or RAM, SPI or QSPI, 24- or 16-bit addresses,
+  dummy read cycles (0x17, 0x18)
+* the SPI mode, SCLK divider and CE delay (0x1e); the data cache on/off and
+  its map (0x1d); the TTLC shift clock and the pin muxes (0x1c, 0x1b)
+
+Up/Down/Tab move, Left/Right/Space change a choice, hex digits and
+Backspace edit a number, Enter presses a button, Esc cancels. The bottom
+shows the register values the form will write and anything inconsistent
+(no flash for program fetch, the data cache on a flash, ...). **OK**
+writes the registers, reads each back, and keeps the settings: `connect`
+applies them from then on, and they are saved in `.tui_prefs`. **Cancel**
+drops the edits; **Read from chip** and **Defaults** reload the form.
+`setup apply` writes the kept settings again (after a project reset),
+`setup defaults` goes back to the defaults. Turning the data cache on
+needs a RAM on its chip select - on the demo board the RP2040's SPI RAM
+emulation, which the LISA Commander starts.
 
 ## Source level (`src/LisaCdb.cxx`)
 

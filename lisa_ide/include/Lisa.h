@@ -25,11 +25,32 @@
 #define LISA_SRC_TYPE_TERM        5
 #define LISA_SRC_TYPE_CONFIG      6
 #define LISA_SRC_TYPE_OTHER       7
+#define LISA_SRC_TYPE_SETUP       8
 
 #define LISA_MAX_PATHS            16
 
 class CLisa;
 typedef int (CLisa::*CLisaFunc_t)(int argc, char* argv[]);
+
+// The debugger's configuration registers (debug_regs.v), as the SETUP tab
+// edits them: which chip select each client uses, where in it, and how
+// each chip select's device is driven.  Base addresses are bytes (the
+// registers hold them >> 8).
+struct LisaSetupCfg
+{
+    int         lisa1_cs, lisa2_cs, ttlc_cs, dbg_cs;     // 0 or 1
+    uint32_t    lisa1_base, lisa2_base, ttlc_base;
+    int         is_flash[2], quad[2], addr16[2], dummy[2];
+    int         spi_mode, sclk_div, ce_delay;
+    int         cache_on, cache_map, shift_div;
+    int         io_mux, out_mux;
+    static LisaSetupCfg Defaults(void);
+    std::vector<std::pair<uint8_t, uint16_t> > Registers(void) const;
+    bool        FromRegisters(const std::map<uint8_t, uint16_t>& r);
+    std::string Validate(void) const;                    // "" if consistent
+    std::string Serialize(void) const;
+    bool        Parse(const char *s);
+};
 
 typedef struct LisaCmd
 {
@@ -150,6 +171,18 @@ private:
     int                 Where(int argc, char* argv[]);
     int                 Setup(int argc, char* argv[]);
     int                 SetupDebugger(uint32_t flashBase);
+    // the SETUP tab (LisaSetup.cxx)
+    int                 ApplySetup(const LisaSetupCfg& cfg, std::string *pReport = NULL);
+    bool                ReadSetup(LisaSetupCfg& cfg);
+    void                OpenSetupTab(void);
+    void                CloseSetupTab(void);
+    bool                IsSetupTab(void);
+    void                DrawSetupWindow(WINDOW *pWnd);
+    int                 SetupKey(int key);
+    void                SetDebugAddress(uint32_t byteAddr);
+    bool                WantAllKeys(void) override { return IsSetupTab(); }
+    void                SaveWatchItems(FILE *fd) override;
+    void                RestoreOtherPref(char *pPref, char *pStr) override;
     int                 ReadRam(uint16_t addr, uint8_t *buf, int n);
     bool                ReadCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uint32_t& acc);
     uint16_t            CodeWord(uint16_t pc);
@@ -233,6 +266,12 @@ private:
     // the address planted -> { the address meant, the SP change between }
     std::map<uint16_t, std::pair<uint16_t, int> > m_Shift;
     std::string         m_OutLine;          // the program's output, a partial line
+    LisaSetupCfg        m_Setup;            // applied on connect, saved in .tui_prefs
+    LisaSetupCfg        m_SetupEdit;        // the SETUP tab's copy until OK
+    lisa_src_t        * m_pSetupSrc;
+    int                 m_SetupField;       // the field with the focus
+    bool                m_SetupFresh;       // the next digit starts a new number
+    std::string         m_SetupStatus;
     static const LisaCmd_t m_TuiCmds[];
 };
 

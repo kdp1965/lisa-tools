@@ -92,6 +92,9 @@ class CTuiSource
                                 TuiSortList_t *&pList) = 0;
     virtual void              FreeTabList(TuiSortList_t *pList) = 0;
     virtual bool              WantProcessKey(void) { return false; }
+    // every key before the TUI's own (arrows, page keys, ...) while its tab
+    // has the focus - a form; ProcessKey returning 0 passes a key on
+    virtual bool              WantAllKeys(void) { return false; }
     virtual int               ProcessKey(int key) { return 0; }
     virtual int               ProcessLine(char *line) { return -1; };
     virtual void              CloseTab(CTab *pTab) { }

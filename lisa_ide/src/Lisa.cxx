@@ -45,7 +45,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"locals",  0, 0, &CLisa::Locals,  "",              "The current function's arguments and locals"},
     {"bt",      0, 0, &CLisa::Backtrace, "",            "Backtrace"},
     {"where",   0, 0, &CLisa::Where,   "",              "The source line at PC"},
-    {"setup",   0, 1, &CLisa::Setup,   "[flash base]",  "Write the debugger's registers (SPI, muxes, cache off) as after connect"},
+    {"setup",   0, 1, &CLisa::Setup,   "[apply|defaults]", "The SETUP tab: chip selects, bases, SPI/QSPI, cache, muxes"},
     {"help",    0, 1, &CLisa::Help,    "[command]",     "List the commands, or explain one"},
     {nullptr,   0, 0, nullptr,         nullptr,         nullptr}
 };
@@ -140,6 +140,11 @@ CLisa::CLisa(CTui *pTui)
     m_TermLine        = 0;
     m_TermCol         = 0;
     m_Halted          = 0;
+    m_Setup           = LisaSetupCfg::Defaults();
+    m_SetupEdit       = m_Setup;
+    m_pSetupSrc       = NULL;
+    m_SetupField      = 0;
+    m_SetupFresh      = true;
     for (x = 0; x < 4; x++)
         m_Breakpoints[x] = 0;
 
@@ -836,6 +841,10 @@ int CLisa::ProcessKey(int key)
     int     bytes;
     int     x;
 
+    // the SETUP tab's form takes the keys while it has the focus
+    if (IsSetupTab())
+        return SetupKey(key);
+
     // Validate we have a good Term Src pointer
     if (m_pTermSrc == NULL)
         return 0;
@@ -942,7 +951,7 @@ Let TUI know if we want the focus
 */
 int CLisa::WantFocus(void)
 {
-    return IsTermTab() ? 1 : 0;
+    return IsTermTab() || IsSetupTab() ? 1 : 0;
 }
 
 /*
@@ -1036,6 +1045,11 @@ void CLisa::DrawSourceWindow(void *pCtx, WINDOW* pWnd, int topLine, int lineCoun
     if (pSrc->type == LISA_SRC_TYPE_TERM)
     {
         DrawTermWindow(pWnd, topLine, lineCount);
+        return;
+    }
+    if (pSrc->type == LISA_SRC_TYPE_SETUP)
+    {
+        DrawSetupWindow(pWnd);
         return;
     }
 
@@ -1208,6 +1222,8 @@ void CLisa::CloseTab(CTab *pTab)
     pSrc = (lisa_src_t *) pCtx;
     if (pSrc == m_pTermSrc)
         m_pTermSrc = NULL;
+    if (pSrc == m_pSetupSrc)            // closed with F4: the edits are dropped
+        m_pSetupSrc = NULL;
 
     // Free the list source control items
     if (pSrc->pListCols)
@@ -1973,18 +1989,18 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  starts the uartPass pass-through, finds LISA's debugger (sending +++ if a\n"
                 "  program had the UART), then runs `setup`. Close the LISA Commander or any\n"
                 "  mpremote session first: only one program can hold the port."},
-    {"setup",   "setup [flash base]\n"
-                "  Writes the debugger's configuration registers and reads each one back:\n"
-                "    0x10-0x12  flash base (default 0): where LISA fetches its program\n"
-                "    0x1c/0x1b  pin muxes: plain SPI on uio[0..3], LISA's PortB on uo_out\n"
-                "    0x17       CS0: single SPI, flash, 24-bit addresses\n"
-                "    0x1e       SPI mode 1, SCLK divider, CS spacing\n"
-                "    0x1d       data cache off: the 128-byte RAM is the data space\n"
-                "  After a project reset the cache is on and the flash port misclocked, so\n"
-                "  programs and RAM reads misbehave until this runs. `connect` does it for\n"
-                "  you; run it by hand after anything that resets the project (re-enabling\n"
-                "  tt_um_lisa, a board reset) or to fetch from another flash base, e.g.\n"
-                "  `setup 0x10000`."},
+    {"setup",   "setup [apply | defaults]\n"
+                "  Without an argument opens the SETUP tab, a form over the debugger's\n"
+                "  configuration registers (read from the chip when connected):\n"
+                "    program fetch (LISA1), data cache (LISA2), TTLC: chip select and base\n"
+                "    debugger flash port: chip select\n"
+                "    per chip select: flash/RAM, SPI/QSPI, 24/16-bit addresses, dummy cycles\n"
+                "    SPI mode, SCLK divider, CE delay; data cache on/off and map; pin muxes\n"
+                "  Up/Down/Tab move, Left/Right/Space change, hex digits edit, Enter on a\n"
+                "  button, Esc cancels. OK checks the settings, writes the registers, reads\n"
+                "  each back and keeps them: connect applies them from then on (saved in\n"
+                "  .tui_prefs). `setup apply` writes the kept settings again (after a\n"
+                "  project reset); `setup defaults` goes back to the defaults."},
     {"debug",   "debug <prog.ihx>\n"
                 "  Loads the program image and the .cdb that `sdcc -mlisa --debug` writes\n"
                 "  beside it, opens each C source in a tab (-> marks the PC's line, * a\n"
