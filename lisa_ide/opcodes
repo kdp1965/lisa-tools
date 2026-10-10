@@ -1,0 +1,93 @@
+Jump and Link
+    0 ppppppppppppp    jal   pmem13         pc <= pmem12, ra <= pc + 1
+
+  Immediate Ops
+    10 0000 iiiiiiii   ldi #imm8            a <= imm8, c <= 0, z <= (a==0)
+    10 0011 iiiiiiii   ret #imm8            a <= imm8, pc <= stack
+    10 0010 100xxxxx   ret                  pc <= stack
+    10 0010 110xxxxx   rc                   If c==1, pc <= stack
+    10 0010 111xxxxx   rz                   If z==1, pc <= stack
+    10 0010 10100000   call ix              Call ix, ix <= ix + 1 (used for printf, etc.)
+    10 0010 10101000   jmp ix               Jump to ix
+    10 0010 10110000   xchg ra              Swap ix with ra
+    10 0010 10110010   xchg sp              Swap ix with sp
+    10 0010 10110011   spix                 ix <= sp
+    10 0010 10110100   cpx  ra              Compare ix and ra
+    10 0010 10110110   cpx  sp              Compare ix and sp
+
+    10 0001 siiiiiii   mulu  [ix/sp+imm7]   {dstack[0] , a} <= a * M[ix/sp+#imm7]
+    10 0100 iiiiiiii   adc #imm8            a <= a + imm8 + c, c and z set appropriately
+    10 0101 iiiiiiii   ads #imm8            sp <= sp + signed(imm8)
+    10 0110 iiiiiiii   adx #imm8            ix <= ix + signed(imm8)
+    10 0111 siiiiiii   dcx #imm7            M[ix/sp + #imm8]--
+
+  Direct Ops
+    10 1000 00000000   shl                  a <<= 1
+    10 1000 00000001   shr                  a >>= 1
+    10 1000 0000001b   ldc   #imm1          Load cflag with b
+    10 1000 000010ii   shl16                {a,temp} <<= 1
+    10 1000 000011ii   shr16                {a,temp} >>= 1
+    10 1000 000001ux   txa                  Transfer IX[7:0]/IX[14:8] to A based on u
+    10 1000 000110cb   ldz                  Load zflag: Complement if C, otherwise zflag = b
+    10 1000 00011100   nop
+    10 1000 00011101   notz
+    10 1000 00011111   brk                  Software breakpoint
+    10 1000 00010bbb   btst  a,#b           Bit test:  c = a[#b]
+    10 1000 00100xxx   push a               Push acc (and cflag) to stack.
+    10 1000 00110xxx   pop a                Pop acc (and cflag) from stack
+    10 1000 010000ux   tax                  Transfer A to IX[7:0]/IX[14:8] based on u
+    10 1000 010100mm   amode                Set arithemetc mode ([signed:shift])
+    10 1000 01011000   sra                  Save Return Address
+    10 1000 01011001   lra                  Load Return Address
+    10 1000 01011010   push ix              Push ix to stack
+    10 1000 01011011   pop ix               Pop ix from stack0
+    10 1000 01011100   lddiv                Load dividend from stack: ra[7:0]<=1(sp) ix[7:0]<=a
+    10 1000 01011110   savec                Save cflag
+    10 1000 01011111   restc                Restore cflag
+    10 1000 01100000   ldx                  Load ix with data in next opcode
+    10 1000 01101c00   addax                Add acc to IX with carry
+    10 1000 01101001   addaxu               Add acc to IX MSB
+    10 1000 01101c10   subax                Subtract acc from IX with borrow
+    10 1000 01101011   subaxu               Subtract acc from IX MSB
+    10 1000 01110iii   ldac                 Load a with condtion flag
+    10 1000 01111ooooo Fops                 Floating Point ops
+    10 1000 10sttccc   if    type, cond     Set cond processing based on type and condition
+    10 1000 110000dv   div                  Do signed/unsigned division (depending on amode[1])
+    10 1000 110001dv   rem                  Do signed/unsigned remainder (depending on amode[1])
+    10 1001 xxxxxxxx   cpi   a,#imm8        Compare A with immediate data, signed/unsigned depending on amode[1]
+
+  Floating Point ops
+    10 1000 011110000h  tfa                 Transfer facc (half) to acc
+    10 1000 011110001h  taf                 Transfer a to facc (half)
+
+    10 1000 01111001ff  fmul                Float mult facc * fx.  Result in facc
+    10 1000 01111010ff  fadd                Float add  facc + fx.  Result in facc
+    10 1000 01111011ff  fneg                Negate fx.  Result in fx
+    10 1000 01111100ff  fswqp               Swap facc and fx.
+    10 1000 01111101ff  fcmp                Compare facc and fx
+    10 1000 01111110ff  fdiv                Divide facc / fx (reserved for future, not implemented yet)
+    10 1000 1100100000  itof                Convert 16-bit facc to bfloat facc
+    10 1000 1100110001  ftoi                Convert 16-bit facc to bfloat facc
+
+  Relative branch
+    10 101b bbbbbbbbbb   bz    #imm9          Branch (+255 / -256) if zflag == 0
+    10 110b bbbbbbbbbb   br    #imm9          Branch (+255 / -256)
+    10 111b bbbbbbbbbb   bnz   #imm9          Branch (+255 / -256) if zflag != 0
+
+  Indirect, Arithmetic and logical ops
+    11 0000 siiiiiii   add   a,[ix/sp+#imm7]    Unsigned add:  a <= a + M[ix/sp+#imm7] + c
+    11 0001 siiiiiii   mul   [ix/sp+imm7]       {dstack[0] , a} <= a * M[ix/sp+#imm7]
+    11 0010 siiiiiii   sub   a,[ix/sp+#imm7]    Unsigned subtract  a <= a - M[ix/sp+#imm7] - c
+    11 0011 0iiiiiii   ldxx  #imm7              ix <= M[sp + #imm7]
+    11 0011 1iiiiiii   stxx  #imm7              M[sp + #imm7] <= ix
+    11 0100 siiiiiii   and   a,[ix/sp+#imm7]
+    11 0101 iiiiiiii   andi  a,#imm8            a <= a AND #imm7
+    11 0110 siiiiiii   or    a,[ix/sp+#imm7]
+    11 0111 piiiiiii   swapi a,[#imm8]          a <=> mem[#imm7]
+    11 1000 siiiiiii   xor   a,[ix/sp+#imm7]
+    11 1001 siiiiiii   inx   #imm7(ix/sp)       M[ix/sp + #imm7]++
+    11 1010 siiiiiii   cmp   a,[ix/sp+#imm7]    Unsigned compare: c = a<M[ix+#imm7], z = a==M[ix+#imm7]
+    11 1011 siiiiiii   swap  a,[ix/sp+#imm7]    a <=> mem[ix+#imm7]
+    11 1100 siiiiiii   ldax  [ix/sp+imm7]       a <= mem[ix+#imm7]
+    11 1101 piiiiiii   lda   [imm8]             a <= mem[#imm7], p specifies upper 128 or lower 128 bytes
+    11 1110 siiiiiii   stax  [ix/sp+imm7]       M[ix+#imm7] <= a

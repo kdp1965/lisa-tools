@@ -1,0 +1,30 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config F1000_TUI
+	tristate "Tui library"
+	default n
+	---help---
+		Enable the Tui pdcurses based library.
+
+if F1000_TUI
+
+config F1000_TUI_PROGNAME
+	string "Program name"
+	default "tui"
+	depends on BUILD_LOADABLE
+	---help---
+		This is the name of the program that will be use when the NSH ELF
+		program is installed.
+
+config F1000_TUI_PRIORITY
+	int "tui task priority"
+	default 100
+
+config F1000_TUI_STACKSIZE
+	int "tui stack size"
+	default 2048
+
+endif

@@ -1,0 +1,10 @@
+# build products
+lisa
+*.o
+.dep/
+# the TUI's per-directory state (window layout, command history)
+.tui_prefs
+# Ken's other tools built on the same TUI framework - not part of lisa_ide
+client/
+merlin/
+pico16/
