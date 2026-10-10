@@ -193,8 +193,12 @@ int CLisa::SetupDebugger(uint32_t flashBase)
         Printf("debugger setup: %s", bad.c_str());
         return -1;
     }
-    Printf("debugger registers set up (program fetch CS%d at 0x%06x, data cache %s%s; `setup` to change)",
-           cfg.lisa1_cs, cfg.lisa1_base, cfg.cache_on ? "on" : "off", cfg.cache_on ? "" : "");
+    Printf("debugger registers set up (program fetch CS%d at 0x%06x, data cache %s; `setup` to change)",
+           cfg.lisa1_cs, cfg.lisa1_base, cfg.cache_on ? "on" : "off");
+    if (cfg.cache_on)
+        Printf("note: with the data cache on, data lives in the RAM on CS%d - on the demo board the RP2040's "
+               "SPI RAM emulation (the LISA Commander starts it); programs for the 128-byte RAM fail without it",
+               cfg.lisa2_cs);
     return 0;
 }
 
@@ -550,6 +554,8 @@ int CLisa::SetupKey(int key)
                            c.lisa1_cs, c.lisa1_base, c.cache_on ? "on" : "off", c.lisa2_cs, c.ttlc_cs, c.ttlc_base);
                 else
                     Printf("setup written, but %s", bad.c_str());
+                if (c.cache_on)
+                    Printf("note: the data cache needs the RAM on CS%d (the RP2040's SPI RAM emulation on the demo board)", c.lisa2_cs);
             }
             m_pParent->WriteUIPreferences();                // keep it
             CloseSetupTab();

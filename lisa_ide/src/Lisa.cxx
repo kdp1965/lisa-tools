@@ -20,7 +20,8 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"delete",  0, 1, &CLisa::Delete,  "[n]",           "Delete breakpoint n (as break lists them), or all"},
     {"br",      0, 1, &CLisa::Break,   "[file:line|func|*addr]", "Same as break"},
     {"ls",      0, 1, &CLisa::Ls,      "",              "Show directory listing"},
-    {"load",    1, 1, &CLisa::Load,    "<file>",        "Program the flash (not implemented yet: use the Commander)"},
+    {"load",    1, 2, &CLisa::Load,    "<prog.ihx> [base]", "Program the flash through LISA, verify it, then debug it"},
+    {"verify",  1, 2, &CLisa::Verify,  "<prog.ihx> [base]", "Compare the flash with an image"},
     {"run",     0, 0, &CLisa::Run,     "",              "Run until a breakpoint or Ctrl-C (the program has the UART)"},
     {"halt",    0, 0, &CLisa::Halt,    "",              "Stop execution"},
     {"stop",    0, 0, &CLisa::Halt,    "",              "Stop execution"},
@@ -140,6 +141,7 @@ CLisa::CLisa(CTui *pTui)
     m_TermLine        = 0;
     m_TermCol         = 0;
     m_Halted          = 0;
+    m_ImagesOnly      = false;
     m_Setup           = LisaSetupCfg::Defaults();
     m_SetupEdit       = m_Setup;
     m_pSetupSrc       = NULL;
@@ -1381,6 +1383,15 @@ TuiSortList_t * CLisa::BuildFileList(const char *pBuffer, bool isLsCmd, bool isR
                     
                     // Get name length
                     len = strlen(dp->d_name);
+
+                    // program images only (load, debug, verify): directories and .ihx/.hex
+                    if (m_ImagesOnly && dp->d_type != DT_DIR &&
+                        !(len > 4 && (strcasecmp(&dp->d_name[len-4], ".ihx") == 0 ||
+                                      strcasecmp(&dp->d_name[len-4], ".hex") == 0)))
+                        continue;
+                    if (m_ImagesOnly && dp->d_type == DT_DIR && dp->d_name[0] == '.' &&
+                        strcmp(dp->d_name, "..") != 0)
+                        continue;
                     
                     // Copy the name to a local var so we can append
                     // a '/' char after directory names
@@ -1392,7 +1403,8 @@ TuiSortList_t * CLisa::BuildFileList(const char *pBuffer, bool isLsCmd, bool isR
                 }
             }
             
-            closedir(dir);
+            if (dir != NULL)                // a directory that would not open: nothing to list
+                closedir(dir);
             if (pathcount == 0 || pPaths == NULL || pPaths[p] == NULL)
                 break;
             
@@ -1485,7 +1497,8 @@ int CLisa::GetCommandTabList(char *pCmd, const char *pBuffer, TuiSortList_t*& pL
 
     // Test for commands that use function names as arguments
     if (strcmp(pCmd, "open") == 0 || strcmp(pCmd, "ls") == 0 ||
-        strcmp(pCmd, "connect") == 0)
+        strcmp(pCmd, "connect") == 0 || strcmp(pCmd, "load") == 0 ||
+        strcmp(pCmd, "debug") == 0 || strcmp(pCmd, "verify") == 0)
     {
         // Skip past filename in the buffer
         c = strlen(pCmd);
@@ -1493,8 +1506,11 @@ int CLisa::GetCommandTabList(char *pCmd, const char *pBuffer, TuiSortList_t*& pL
           c++;
         
         // Build a list of known variables
+        // load / debug / verify take a program image: offer only those and directories
+        m_ImagesOnly = strcmp(pCmd, "load") == 0 || strcmp(pCmd, "debug") == 0 || strcmp(pCmd, "verify") == 0;
         pList = BuildFileList(&pBuffer[c], strcmp(pCmd, "ls") == 0 ||
                   strcmp(pCmd, "path") == 0, strcmp(pCmd, "run") == 0);
+        m_ImagesOnly = false;
         return 1;
     }
 
@@ -2129,17 +2145,6 @@ int CLisa::Set(int argc, char *argv[])
         Printf("Error writing LISA");
     else
         m_pParent->DrawSourceWindow();
-    return 0;
-}
-
-/*
-==============================================================================
-Load program to LISA FLASH or SRAM
-==============================================================================
-*/
-int CLisa::Load(int argc, char* argv[])
-{
-    DebugPrintf("[TODO] Load not implemented. Would load file: %s\n", argv[1]);
     return 0;
 }
 

@@ -42,7 +42,7 @@ DEPS     = $(wildcard $(DEPDIR)/*.d)
 
 CFLAGS   = -Wall -g -DSTANDALONE -I tui -I include -I ../lisa_cdb
 CXXFLAGS = $(CFLAGS) -std=c++17
-CXXSRCS  = $(SRCDIR)/Lisa.cxx $(SRCDIR)/LisaCdb.cxx $(SRCDIR)/LisaSetup.cxx $(SRCDIR)/Main.cxx
+CXXSRCS  = $(SRCDIR)/Lisa.cxx $(SRCDIR)/LisaCdb.cxx $(SRCDIR)/LisaSetup.cxx $(SRCDIR)/LisaFlash.cxx $(SRCDIR)/Main.cxx
 CXXSRCS += $(SRCDIR)/serial.cxx
 CXXSRCS += tui/Tui.cxx tui/simevent.cxx tui/thread.cxx tui/Tabs.cxx tui/History.cxx
 # the .cdb reader and the image loader, shared with lisa_sim

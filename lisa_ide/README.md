@@ -9,6 +9,7 @@ window, a terminal tab for LISA's UART.
 make                       # ./lisa (macOS: the system ncurses, or /opt/homebrew's if installed)
 ./lisa
 lisa> connect /dev/cu.usbmodem1101        # the board's REPL: selects tt_um_lisa, starts uartPass, finds the debugger
+lisa> load ../sdcc_test/test_core.ihx     # program + verify the flash through LISA, then as debug (Tab completes)
 lisa> debug ../sdcc_test/test_core.ihx    # the image and its .cdb (sdcc --debug), the sources in tabs
 lisa> break main                          # or file:line, a line of the active tab, *addr
 lisa> run
@@ -24,6 +25,20 @@ instruction, the chip's step bit), `set reg=val`, `read`/`write` (debugger
 registers), `reset`, `term`, `ls`, `sp`, `pc`, and the source level: `debug`,
 `next`/`n`, `into`, `finish`, `print`/`p`, `locals`, `bt`, `where`, and
 `setup` (the SETUP tab).
+
+## Programming (`src/LisaFlash.cxx`)
+
+`load <prog.ihx> [base]` programs the flash through LISA's debugger, as the
+LISA Commander's "via LISA" does: the core halted, the 64 KB blocks the
+image touches erased, then one word per exchange (`w20<word>` with the
+flash status `r22` in the same round trip, ~2.6 ms through the RP2040's
+pass-through: test_index's 1208 words take 6.6 s), a read-back verify, the
+instruction cache invalidated and the core reset to PC 0; then it does a
+`debug` of the image. The base defaults to the program fetch base (the
+SETUP tab); another base is programmed but not run from. `verify
+<prog.ihx> [base]` compares only. Ctrl-C stops a load (the flash is then
+partly programmed). Tab after `load`, `debug` or `verify` completes
+directories and `.ihx`/`.hex` files.
 
 ## The SETUP tab (`src/LisaSetup.cxx`)
 

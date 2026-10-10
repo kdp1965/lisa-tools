@@ -140,6 +140,12 @@ public:
     // Optional overrides
 private:
     int                 Load(int argc, char* argv[]);
+    int                 Verify(int argc, char* argv[]);
+    // flashing (LisaFlash.cxx)
+    int                 Exchange(const char *cmd, uint32_t& value, int timeoutMs = 500);
+    bool                FlashIdle(int timeoutMs);
+    int                 ProgramFlash(const std::vector<uint16_t>& words, uint32_t base);
+    int                 VerifyFlash(const std::vector<uint16_t>& words, uint32_t base, bool quiet);
     int                 Run(int argc, char* argv[]);
     int                 Halt(int argc, char* argv[]);
     int                 Reset(int argc, char* argv[]);
@@ -266,6 +272,7 @@ private:
     // the address planted -> { the address meant, the SP change between }
     std::map<uint16_t, std::pair<uint16_t, int> > m_Shift;
     std::string         m_OutLine;          // the program's output, a partial line
+    bool                m_ImagesOnly;       // file completion offers program images only
     LisaSetupCfg        m_Setup;            // applied on connect, saved in .tui_prefs
     LisaSetupCfg        m_SetupEdit;        // the SETUP tab's copy until OK
     lisa_src_t        * m_pSetupSrc;
