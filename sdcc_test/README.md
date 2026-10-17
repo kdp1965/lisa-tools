@@ -4,6 +4,9 @@ Test programs for `sdcc -mlisa` (the SDCC port in `../sdcc-lisa`,
 see its `README-lisa.md` and `src/lisa/PLAN.md`).
 
     make check          # build and run everything on ../lisa_sim/lisa_sim
+    make check REV2=1   # the same built with sdcc --rev2 (the second chip:
+                        # its stack convention, bf16_add on its adder), as
+                        # *_rev2.ihx on lisa_sim --rev2; no TT07 cache tests
     make                # just build the .ihx files
     make asm            # generated assembly for inspection
     SDCC=... SIM=... make check     # other compiler / simulator binaries

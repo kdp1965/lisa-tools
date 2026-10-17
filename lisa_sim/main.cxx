@@ -24,6 +24,11 @@ static void usage(const char* prog) {
     printf("                   macro), filled by lines of P clocks (default %d + %d per word), or with\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
     printf("                   stream by a QSPI burst that keeps running (%d per word, a restart of P,\n", InstCache::FILL_PER_WORD);
     printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
+    printf("  --rev2           The second chip (ttsky26c-um-lisa-ttlc): the stack pointer at the\n");
+    printf("                   byte on top of the stack (push decrements first, pop increments\n");
+    printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
+    printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals), and\n");
+    printf("                   --fixed-irq. Default: the TT07 silicon\n");
     printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
     printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
     printf("                   cflag_save and signed_inversion shadowed. Default: the\n");
@@ -39,6 +44,7 @@ int main(int argc, char** argv) {
     bool batch = false;
     unsigned long ram_bytes = 0;
     bool fixed_irq = false;
+    bool rev2 = false;
     bool trace = false;
     int icache_lines = -1, icache_words = 4, icache_penalty = 0;
     bool icache_direct = false, icache_stream = false;
@@ -79,6 +85,8 @@ int main(int argc, char** argv) {
             }
         } else if (strcmp(argv[i], "--fixed-irq") == 0) {
             fixed_irq = true;
+        } else if (strcmp(argv[i], "--rev2") == 0) {
+            rev2 = true;
         } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
             ram_bytes = strtoul(argv[++i], nullptr, 0);
             if (ram_bytes < 2 || ram_bytes > 32768 || (ram_bytes & (ram_bytes - 1))) {
@@ -103,6 +111,10 @@ int main(int argc, char** argv) {
         sim.memory().set_data_size(ram_bytes);
     if (fixed_irq)
         sim.core().set_fixed_irq(true);
+    if (rev2) {
+        sim.core().set_rev2(true);
+        lisa::Cdb::set_sp_top(0);      // the frames of sdcc --rev2 start at 0(sp)
+    }
     if (icache_lines >= 0)
         sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct, icache_stream);
 

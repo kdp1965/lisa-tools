@@ -92,6 +92,12 @@ public:
     void clear_interrupt(uint8_t mask);
     void set_int_enable(uint8_t mask) { int_en_ = mask; }
     void set_fixed_irq(bool on) { fixed_irq_ = on; }
+    // --rev2: the second chip (ttsky26c-um-lisa-ttlc, RESPIN.md): the
+    // stack pointer at the byte on top of the stack (push decrements first,
+    // pop increments after), swap n(sp) at sp + n, the rewritten bf16 adder,
+    // and the fixed interrupt semantics
+    void set_rev2(bool on) { rev2_ = on; if (on) fixed_irq_ = true; }
+    bool rev2() const { return rev2_; }
 
     // Trace callback
     using TraceCallback = std::function<void(uint16_t pc, uint16_t inst, const LisaCoreState& state)>;
@@ -124,6 +130,7 @@ private:
     // only with cond == 3 and no ldx in flight; amode, cflag_save and the
     // live signed_inversion shadowed too)
     bool     fixed_irq_ = false;
+    bool     rev2_ = false;
     uint8_t  amode_isr_ = 1;
     bool     cflag_save_isr_ = false;
     bool     signed_inv_live_isr_ = false;

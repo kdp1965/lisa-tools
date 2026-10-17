@@ -2,6 +2,10 @@
 #
 #   make            build every test program (.ihx)
 #   make check      build and run them on the C++ simulator (../lisa_sim)
+#   make check REV2=1   the same built with sdcc --rev2 (the second chip: its
+#                   stack convention, bf16_add on its adder, lisa-rev2 library)
+#                   as *_rev2.ihx, run on lisa_sim --rev2; the TT07 cache
+#                   tests and probes are left out
 #   make icache     the instruction cache study: misses and clocks per instruction
 #                   for several cache shapes (icache_sweep.py, lisa_sim --icache)
 #   make asm        keep the generated assembly (*.asm) for inspection
@@ -13,6 +17,12 @@ SDCC   ?= ../sdcc-lisa/build/bin/sdcc
 SIM    ?= ../lisa_sim/lisa_sim
 CYCLES ?= 2000000
 CFLAGS ?= -mlisa --debug
+# REV2=1: everything for the second chip
+ifneq ($(REV2),)
+SFX      = _rev2
+CFLAGS  += --rev2
+REV2SIM  = --rev2
+endif
 
 SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
 # Probes of the TT07 interrupt hazards (built, not checked: they fail on the
@@ -24,23 +34,23 @@ OUTPUT    = hello test_printf test_owl
 CACHE     = test_cacherm test_cachermw test_cachepush test_cachewb test_cacheseq test_cacheloop test_cacheperiph
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
-TESTS     = $(SELFCHECK) $(OUTPUT) $(PROBES) $(CACHE)
+TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),,$(PROBES) $(CACHE))
 
-all: $(TESTS:%=%.ihx)
+all: $(TESTS:%=%$(SFX).ihx)
 
 # a new compiler or library rebuilds everything (a stale .ihx once made
 # 15 suites "fail")
 DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib)
 
-%.ihx: %.c $(DEPS)
+%$(SFX).ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $<
 
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
-test_bigframe.ihx: test_bigframe.c $(DEPS)
+test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # the C type float on the bfloat16 unit
-test_bf16f.ihx: test_bf16f.c $(DEPS)
+test_bf16f$(SFX).ihx: test_bf16f.c $(DEPS)
 	$(SDCC) $(CFLAGS) --bf16-float -o $@ $<
 
 # the cache tests use the 32K data space as the TT07 cache folds it: stack
@@ -57,7 +67,7 @@ check: all
 	@pass=0; fail=0; \
 	for t in $(SELFCHECK); do \
 	  eval f=\$$SIMFLAGS_$$t; \
-	  out=$$(SIM=$(SIM) SIMFLAGS="$$f" ./run_sim.sh $$t.ihx $(CYCLES)); \
+	  out=$$(SIM=$(SIM) SIMFLAGS="$$f $(REV2SIM)" ./run_sim.sh $${t}$(SFX).ihx $(CYCLES)); \
 	  n=$$(printf '%s\n' "$$out" | grep -c '^ok'); \
 	  if printf '%s\n' "$$out" | grep -q '^ALL PASSED'; then \
 	    echo "PASS $$t ($$n cases)"; pass=$$((pass+1)); \
@@ -66,7 +76,7 @@ check: all
 	  fi; \
 	done; \
 	for t in $(OUTPUT); do \
-	  if SIM=$(SIM) ./run_sim.sh $$t.ihx $(CYCLES) | diff -u expected/$$t.txt - > $$t.diff; then \
+	  if SIM=$(SIM) SIMFLAGS="$(REV2SIM)" ./run_sim.sh $${t}$(SFX).ihx $(CYCLES) | diff -u expected/$$t.txt - > $$t.diff; then \
 	    echo "PASS $$t (output matches)"; pass=$$((pass+1)); rm -f $$t.diff; \
 	  else \
 	    echo "FAIL $$t (see $$t.diff)"; fail=$$((fail+1)); \
@@ -77,7 +87,7 @@ check: all
 icache: all
 	@python3 ./icache_sweep.py
 
-asm: $(TESTS:%=%.asm)
+asm: $(TESTS:%=%$(SFX).asm)
 
 %.asm: %.c harness.h
 	$(SDCC) $(CFLAGS) -S -o $@ $<

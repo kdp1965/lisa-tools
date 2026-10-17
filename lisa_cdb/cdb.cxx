@@ -462,11 +462,13 @@ const CdbStruct* Cdb::struct_named(const std::string& name) const {
     return nullptr;
 }
 
+int Cdb::sp_top_ = 1;
+
 uint16_t Cdb::local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot) {
-    // an argument (offset >= 0) was pushed by the caller: at entry_sp + 1
-    // up, past the result slot; a local (offset < 0) lies below the return
-    // address the sra pushed
-    int a = (int)entry_sp + 1 + s.offset;
+    // an argument (offset >= 0) was pushed by the caller: from the top of
+    // the stack at entry (entry_sp + sp_top_) up, past the result slot; a
+    // local (offset < 0) lies below the return address the sra pushed
+    int a = (int)entry_sp + sp_top_ + s.offset;
     if (s.offset >= 0) a += ret_slot;
     else if (ra_saved) a -= 2;
     return (uint16_t)(a & 0x7fff);
@@ -828,7 +830,10 @@ std::vector<Cdb::StackFrame> Cdb::unwind(uint16_t pc, uint16_t sp, uint16_t ra, 
         fr.ra_saved = p.ra_saved;
         if (p.ra_saved) {
             if (!rd) break;
-            fr.ret_pc = (uint16_t)(rd(fr.entry_sp) | ((rd((uint16_t)(fr.entry_sp - 1)) & 0x7f) << 8));
+            // the sra at entry: RA's low byte on top of the stack, the high
+            // byte (with ra_cond) below it
+            uint16_t lo = (uint16_t)((fr.entry_sp + sp_top_ - 1) & 0x7fff);
+            fr.ret_pc = (uint16_t)(rd(lo) | ((rd((uint16_t)((lo - 1) & 0x7fff)) & 0x7f) << 8));
         } else if (depth == 0) {
             fr.ret_pc = ra & 0x7fff;
         } else {

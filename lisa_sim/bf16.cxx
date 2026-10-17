@@ -230,6 +230,73 @@ uint16_t BF16Unit::fadd_rtl(uint16_t a_in, uint16_t b_in, bool round_to_zero) {
     return (output_sign ? 0x8000 : 0) | ((e_res & 0xFF) << 7) | ((f_rounded >> 2) & 0x7F);
 }
 
+// The second chip's fadd (ttsky26c-um-lisa-ttlc src/fops.v, rewritten for
+// it: RESPIN.md item 4).  Significands are 12 bits {carry, hidden,
+// fraction[6:0], G, R, sticky}; the smaller operand is aligned with the bits
+// it loses folded into the sticky bit, the sum normalized (into the
+// subnormal range when the exponent runs out) and rounded to nearest even,
+// or toward zero with amode[2].  Checked against the testbench's exact
+// reference (test/fops/bf16.py) on random and directed vectors.
+uint16_t BF16Unit::fadd_rev2(uint16_t a_in, uint16_t b_in, bool round_to_zero) {
+    bool i1, d1, z1, s1, q1, i2, d2, z2, s2, q2;
+    unsigned e1, e2;
+    classify_rtl(a_in, i1, d1, z1, s1, q1, e1);
+    classify_rtl(b_in, i2, d2, z2, s2, q2, e2);
+    bool a_GT_b = (a_in & 0x7FFF) > (b_in & 0x7FFF);
+    uint16_t operand_a = a_GT_b ? a_in : b_in, operand_b = a_GT_b ? b_in : a_in;
+    bool a_isDN = a_GT_b ? d1 : d2, b_isDN = a_GT_b ? d2 : d1;
+    bool a_isZ = a_GT_b ? z1 : z2, b_isZ = a_GT_b ? z2 : z1;
+    bool a_isINF = a_GT_b ? i1 : i2, b_isINF = a_GT_b ? i2 : i1;
+    bool a_isNAN = a_GT_b ? (s1 || q1) : (s2 || q2), b_isNAN = a_GT_b ? (s2 || q2) : (s1 || q1);
+    unsigned a_e = a_GT_b ? e1 : e2, b_e = a_GT_b ? e2 : e1;
+    bool a_assumedOne = !a_isZ && !a_isDN, b_assumedOne = !b_isZ && !b_isDN;
+    bool operation_sub = ((operand_a ^ operand_b) & 0x8000) != 0;
+    unsigned sig_a = (a_assumedOne ? 0x400 : 0) | ((operand_a & 0x7F) << 3);
+    unsigned sig_b = (b_assumedOne ? 0x400 : 0) | ((operand_b & 0x7F) << 3);
+    unsigned ediff = (a_e - b_e) & 0x1FF;
+    bool far = ediff > 11;
+    unsigned sig_b_sh = far ? 0 : (sig_b >> (ediff & 0xF));
+    unsigned lost_mask = far ? 0xFFF : (~(0xFFFu << (ediff & 0xF)) & 0xFFF);
+    bool sticky = (sig_b & lost_mask) != 0;
+    unsigned sig_b_al = (sig_b_sh & 0xFFE) | ((sig_b_sh & 1) | (sticky ? 1 : 0));
+    unsigned sum = (operation_sub ? (sig_a - sig_b_al) : (sig_a + sig_b_al)) & 0xFFF;
+    int lz = 11;
+    for (int i = 10; i >= 0; i--)
+        if (sum & (1u << i)) { lz = 10 - i; break; }
+    unsigned e_res, f_res;
+    if (sum & 0x800) {
+        e_res = (a_e + 1) & 0x1FF;
+        f_res = (((sum >> 2) & 0x3FF) << 1) | (((sum >> 1) | sum) & 1);
+    } else if (sum & 0x400) {
+        e_res = a_e;
+        f_res = sum;
+    } else if (sum == 0) {
+        e_res = 0;
+        f_res = 0;
+    } else if (a_e > (unsigned)lz) {
+        e_res = (a_e - lz) & 0x1FF;
+        f_res = (sum << lz) & 0xFFF;
+    } else {
+        unsigned sh = (a_e - 1) & 0x1FF;              // subnormal: the smallest exponent
+        e_res = 0;
+        f_res = sh >= 12 ? 0 : (sum << sh) & 0xFFF;
+    }
+    bool round_up = !round_to_zero && ((f_res >> 2) & 1) && (((f_res >> 1) & 1) || (f_res & 1) || ((f_res >> 3) & 1));
+    unsigned f_rounded = ((f_res >> 3) & 0xFF) + (round_up ? 1 : 0);          // {carry, hidden, fraction}
+    unsigned e_rounded = (f_rounded & 0x100) ? (e_res + 1) & 0x1FF : (e_res == 0 && (f_rounded & 0x80)) ? 1 : e_res;
+    unsigned frac_out = (f_rounded & 0x100) ? 0 : (f_rounded & 0x7F);
+    bool overflow = e_rounded >= 255;
+    bool zero_res = e_rounded == 0 && frac_out == 0;
+    bool output_sign = zero_res ? ((a_in & b_in & 0x8000) != 0) : ((operand_a & 0x8000) != 0);
+    bool isNAN = a_isNAN || b_isNAN || (a_isINF && b_isINF && operation_sub);
+    bool isINF = a_isINF || b_isINF;
+    bool inf_sign = a_isINF ? ((operand_a & 0x8000) != 0) : ((operand_b & 0x8000) != 0);
+    if (isNAN) return 0x7FC0;
+    if (isINF) return (inf_sign ? 0x8000 : 0) | 0x7F80;
+    if (overflow) return (output_sign ? 0x8000 : 0) | 0x7F80;
+    return (output_sign ? 0x8000 : 0) | ((e_rounded & 0xFF) << 7) | frac_out;
+}
+
 // fops.v fmul: the 8x8 product of the significands, truncated to the
 // 7 fraction bits below the leading one (no rounding); an underflowing
 // exponent is treated like an overflow (infinity)

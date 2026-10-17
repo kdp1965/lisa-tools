@@ -22,7 +22,8 @@
 // is B (stack), E (data), C (code, a function), D (a constant in code
 // space), I (a peripheral register), R (register), Z (struct member).
 // A stack <offset> is relative to the stack pointer at the function's
-// entry (see Cdb::local_address).
+// entry (see Cdb::local_address); where the top of the stack is relative
+// to SP depends on the chip (sp_top: 1 on TT07, 0 on the second chip).
 //
 // The file's addresses are the linker's bytes; this reader converts them
 // as it loads: a line's or function's address is the word the PC holds,
@@ -121,6 +122,11 @@ public:
     // slot it reserves for a result wider than two bytes or a struct
     // (ret_slot bytes, see return_slot) - and the locals below it.
     static uint16_t local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot = 0);
+    // The offset of the byte on top of the stack: 1 on TT07 (a push writes
+    // at SP and decrements), 0 on the second chip (it decrements first; the
+    // code is compiled with sdcc --rev2, lisa_sim --rev2 runs it)
+    static void set_sp_top(int top) { sp_top_ = top; }
+    static int  sp_top() { return sp_top_; }
     int return_slot(const CdbFunction& f) const;
 
     // a value as text: reads data bytes through rd, code-space constants
@@ -213,6 +219,7 @@ public:
 
 private:
     bool loaded_ = false;
+    static int sp_top_;
     std::string path_, dir_;
     std::vector<CdbLine> lines_;        // sorted by address
     std::vector<CdbFunction> functions_;// sorted by address

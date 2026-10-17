@@ -115,12 +115,27 @@ int8_t LisaCore::sign_extend_8(uint8_t val) const {
     return (int8_t)val;
 }
 
+// TT07: a push writes at SP and then decrements it, a pop increments it and
+// then reads, so SP is one below the byte on top of the stack (1(sp)).  The
+// second chip (--rev2) decrements first and increments after: SP is at the
+// top byte (0(sp)).  The two bytes of sra / push ix keep their order either
+// way: the high byte (with the cond bit) at the lower address.
 void LisaCore::push_byte(uint8_t val) {
-    if (mem_) mem_->data_write(sp_ & D_MASK, val);
-    sp_ = (sp_ - 1) & D_MASK;
+    if (rev2_) {
+        sp_ = (sp_ - 1) & D_MASK;
+        if (mem_) mem_->data_write(sp_ & D_MASK, val);
+    } else {
+        if (mem_) mem_->data_write(sp_ & D_MASK, val);
+        sp_ = (sp_ - 1) & D_MASK;
+    }
 }
 
 uint8_t LisaCore::pop_byte() {
+    if (rev2_) {
+        uint8_t v = mem_ ? mem_->data_read(sp_ & D_MASK) : 0;
+        sp_ = (sp_ + 1) & D_MASK;
+        return v;
+    }
     sp_ = (sp_ + 1) & D_MASK;
     return mem_ ? mem_->data_read(sp_ & D_MASK) : 0;
 }
@@ -246,6 +261,10 @@ void LisaCore::div_aftermath(uint8_t dv, uint16_t off, uint16_t divisor, bool is
     ra_cond_ = true;
     ix_ = 0;
     ix_cond_ = false;
+    // TT07's stray write of the low byte (RESPIN.md item 8); the second
+    // chip's divider writes nothing to memory
+    if (rev2_)
+        return;
     if (!(dv & 1)) {
         if (!(off & 2))
             data_write(off & D_MASK, a_, false);
@@ -860,7 +879,7 @@ int LisaCore::step_inst() {
         // from the ads adder, sp + sext({1, imm9}) = sp + imm9 - 512.  The
         // 128-byte RAM hides it (the address is taken modulo its size), the
         // 32K data space does not.  The IX form is right.
-        uint16_t swap_addr = base_sp ? (uint16_t)((sp_ + uimm9 - 512) & D_MASK) : d_addr;
+        uint16_t swap_addr = (base_sp && !rev2_) ? (uint16_t)((sp_ + uimm9 - 512) & D_MASK) : d_addr;
         if (cond_ & 1) {
             uint8_t val = data_read(swap_addr, false);
             data_write(swap_addr, a_, false);
@@ -1458,7 +1477,8 @@ int LisaCore::step_inst() {
             if (top14 == 0x287A) {
                 if (cond_ & 1) {
                     uint8_t idx = inst & 0x03;
-                    bf16_->facc = BF16Unit::fadd_rtl(bf16_->facc, bf16_->f[idx], (amode_ & 0x04) != 0);
+                    bf16_->facc = rev2_ ? BF16Unit::fadd_rev2(bf16_->facc, bf16_->f[idx], (amode_ & 0x04) != 0)
+                                        : BF16Unit::fadd_rtl(bf16_->facc, bf16_->f[idx], (amode_ & 0x04) != 0);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 inst_count_++;
