@@ -84,7 +84,9 @@ int main(void)
   CHECK(58, sj / sk == -28571L && sj % sk == 30000L);
   CHECK(59, sc / sb == 0L && sc % sb == -7L && sb / sa == 0L && sb % sa == 1000L);
   CHECK(60, se / sg == 32768L && se % sg == 0L && se / sb * sb + se % sb == se);
-  /* an LCG stream, divisors of every size, against the bit-serial reference */
+  /* an LCG stream, divisors of every size, against the bit-serial reference;
+     a mark every 16 (about 1M clocks on the chip testbench, whose suite runner
+     gives up after 6M clocks of silence: the 200 take 18M) */
   for (i = 0; i < 200; i++) {
     unsigned long a, b, r, q;
     x = x * 1103515245UL + 12345UL;
@@ -97,7 +99,10 @@ int main(void)
       bad++;
       puts("bad "); puthex((unsigned int)(a >> 16)); puthex((unsigned int)a); putc('/'); puthex((unsigned int)(b >> 16)); puthex((unsigned int)b); putc('\n');
     }
+    if ((i & 15) == 15)
+      putc('.');
   }
+  putc('\n');
   CHECK(54, bad == 0);
   DONE();
   return 0;
