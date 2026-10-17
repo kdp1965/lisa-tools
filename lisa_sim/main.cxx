@@ -19,10 +19,11 @@ static void usage(const char* prog) {
     printf("     --port PORT\n");
     printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
     printf("                   without the cache; default 32768); addresses wrap\n");
-    printf("  --icache=N[xW][,P][,direct]  Model an instruction cache of N lines of W words (the\n");
-    printf("                   chip: 1x4): P clocks per line fill (default %d + %d per word), LRU\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
-    printf("                   replacement of unaligned lines (flops) or direct-mapped aligned lines\n");
-    printf("                   (a RAM macro); the counts are printed on stderr after a run\n");
+    printf("  --icache=N[xW][,P][,direct][,stream]  Model the instruction fetch: a cache of N lines\n");
+    printf("                   of W words (the chip: 1x4; LRU, or direct-mapped aligned lines as a RAM\n");
+    printf("                   macro), filled by lines of P clocks (default %d + %d per word), or with\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
+    printf("                   stream by a QSPI burst that keeps running (%d per word, a restart of P,\n", InstCache::FILL_PER_WORD);
+    printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
     printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
     printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
     printf("                   cflag_save and signed_inversion shadowed. Default: the\n");
@@ -39,8 +40,8 @@ int main(int argc, char** argv) {
     unsigned long ram_bytes = 0;
     bool fixed_irq = false;
     bool trace = false;
-    int icache_lines = 0, icache_words = 4, icache_penalty = 0;
-    bool icache_direct = false;
+    int icache_lines = -1, icache_words = 4, icache_penalty = 0;
+    bool icache_direct = false, icache_stream = false;
     uint64_t max_cycles = 0;
     int max_steps = 0;
     std::string serial_port;
@@ -67,9 +68,13 @@ int main(int argc, char** argv) {
             icache_lines = (int)strtol(p, &p, 0);
             if (*p == 'x') icache_words = (int)strtol(p + 1, &p, 0);
             if (*p == ',' && isdigit((unsigned char)p[1])) icache_penalty = (int)strtol(p + 1, &p, 0);
-            if (*p == ',' && strcmp(p + 1, "direct") == 0) { icache_direct = true; p += strlen(p); }
-            if (icache_lines < 1 || icache_words < 1 || *p) {
-                fprintf(stderr, "Error: --icache=N[xW][,P][,direct] with N and W >= 1\n");
+            while (*p == ',') {
+                if (strncmp(p + 1, "direct", 6) == 0) { icache_direct = true; p += 7; }
+                else if (strncmp(p + 1, "stream", 6) == 0) { icache_stream = true; p += 7; }
+                else break;
+            }
+            if (icache_lines < (icache_stream ? 0 : 1) || icache_words < 1 || *p) {
+                fprintf(stderr, "Error: --icache=N[xW][,P][,direct][,stream] with W >= 1 and N >= 1 (0 with stream)\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--fixed-irq") == 0) {
@@ -98,8 +103,8 @@ int main(int argc, char** argv) {
         sim.memory().set_data_size(ram_bytes);
     if (fixed_irq)
         sim.core().set_fixed_irq(true);
-    if (icache_lines)
-        sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct);
+    if (icache_lines >= 0)
+        sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct, icache_stream);
 
     if (!firmware_file.empty()) {
         if (sim.load_firmware(firmware_file)) {

@@ -9,8 +9,10 @@ PROGS = ('test_core test_negate test_union test_varargs test_digits test_signed 
          'test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f '
          'test_ptroff test_rot test_index test_vshift hello test_printf test_owl').split()
 FLAGS = {'test_irq': ['--fixed-irq']}
-CONFIGS = [('chip 1x4', '1x4'), ('4x4 LRU', '4x4'), ('16x4 direct', '16x4,direct'), ('16x4 LRU', '16x4'),
-           ('1x8', '1x8'), ('1x16', '1x16'), ('4x16 LRU', '4x16'), ('8x8 direct', '8x8,direct'), ('2x32 LRU', '2x32')]
+CONFIGS = [('chip 1x4', '1x4'), ('4x4 LRU', '4x4'), ('16x4 direct', '16x4,direct'), ('4x16 LRU', '4x16'),
+           ('stream', '0,stream'), ('stream+1x4', '1x4,stream'), ('stream+4x4', '4x4,stream'),
+           ('stream+4x16', '4x16,stream'), ('stream+16x4 dir', '16x4,direct,stream'),
+           ('stream+4x16 r40', '4x16,40,stream')]
 if len(sys.argv) > 1: CONFIGS = [c for c in CONFIGS if c[0] in sys.argv[1:]] or CONFIGS
 res = {}
 for p in PROGS:
@@ -18,7 +20,7 @@ for p in PROGS:
         out = subprocess.run([SIM, '-b', f'--icache={cfg}', '-c', '2000000'] + FLAGS.get(p, []) + [p + '.ihx'],
                              capture_output=True, text=True).stderr
         m = re.search(r'instructions (\d+)\s+fetches (\d+)\s+hits ([\d.]+)%\s+misses (\d+) \(([\d.]+) per 1000 instructions: (\d+) streaming', out)
-        c = re.search(r'clocks (\d+): (\d+) executing \+ (\d+) in fills \((\d+)% stalled\), ([\d.]+) per instruction', out)
+        c = re.search(r'clocks (\d+): (\d+) executing \+ (\d+) stalled \((\d+)%\), ([\d.]+) per instruction', out)
         if not m or not c:
             print('no report for', p, cfg, out[-200:]); continue
         res[(p, name)] = dict(insts=int(m.group(1)), misses=int(m.group(4)), mpk=float(m.group(5)), seq=int(m.group(6)),

@@ -177,7 +177,8 @@ void LisaCli::cmd_help() {
     printf("  bpc                  Clear all breakpoints\n");
     printf("  dis [addr] [count]   Disassemble (default at PC, 10 insns)\n");
     printf("  trace on|off         Toggle instruction trace\n");
-    printf("  icache [N[xW] [P] [direct]|off]  Model an N-line instruction cache of W words / show its counts\n");
+    printf("  icache [N[xW] [P] [direct] [stream]|off]  Model the instruction fetch (N lines of W words,\n");
+    printf("                       a streaming burst) / show its counts\n");
     printf("  periph               Show peripheral state\n");
     printf("  uart <text>          Send text to UART1\n");
     printf("  serial <port> [1|2]  Connect UART to host serial port\n");
@@ -1125,7 +1126,8 @@ void LisaCli::cmd_cdb(const std::vector<std::string>& args) {
 // counts since the last configure/reset; `icache N[xW] [P] [direct]` models
 // N lines of W words (4) with a fill of P clocks (the QSPI cost of W words),
 // LRU on unaligned lines unless direct (a macro's direct-mapped aligned
-// lines); `icache off`.
+// lines); with stream, a QSPI burst that keeps running feeds the core and
+// the lines cache what came through (N may be 0); `icache off`.
 void LisaCli::cmd_icache(const std::vector<std::string>& args) {
     InstCache& ic = sim_.icache();
     if (args.size() < 2) {
@@ -1141,16 +1143,17 @@ void LisaCli::cmd_icache(const std::vector<std::string>& args) {
     int lines = (int)parse_number(args[1].substr(0, x));
     int words = x == std::string::npos ? 4 : (int)parse_number(args[1].substr(x + 1));
     int penalty = 0;
-    bool direct = false;
+    bool direct = false, stream = false;
     for (size_t i = 2; i < args.size(); i++) {
         if (args[i] == "direct") direct = true;
         else if (args[i] == "lru") direct = false;
+        else if (args[i] == "stream") stream = true;
         else penalty = (int)parse_number(args[i]);
     }
-    if (lines < 1 || words < 1) {
-        printf("icache: N and W must be at least 1 (the chip: 1x4)\n");
+    if (lines < (stream ? 0 : 1) || words < 1) {
+        printf("icache: W must be at least 1 and N at least 1 (0 with stream); the chip is 1x4\n");
         return;
     }
-    ic.configure(lines, words, penalty, direct);
+    ic.configure(lines, words, penalty, direct, stream);
     printf("icache: %s (counting from here)\n", ic.describe().c_str());
 }
