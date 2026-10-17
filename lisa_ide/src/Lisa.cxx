@@ -2030,7 +2030,7 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  off: the cache off (the 128-byte RAM), the other settings kept.\n"
                 "  The SETUP tab's cache on/off does the same with its own settings."},
     {"rev2",    "rev2 [on|off]\n"
-                "  on: the chip is the second one (ttsky26c): push decrements SP before the\n"
+                "  on: the chip is the second one (ttsky26d): push decrements SP before the\n"
                 "  write and pop increments after the read, so SP is the byte on top of the\n"
                 "  stack and 0(sp) the top of a frame; the .cdb reader (locals, print, bt,\n"
                 "  next, finish) counts frames from there. Programs are built with\n"

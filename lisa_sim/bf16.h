@@ -37,7 +37,7 @@ struct BF16Unit {
     // as the TT07 silicon computes them, quirks included), and its
     // compare (lisa_core.v fcmp: Z on equal patterns, C on facc > fx)
     static uint16_t fadd_rtl(uint16_t a_in, uint16_t b_in, bool round_to_zero);
-    // The second chip's adder (ttsky26c fops.v, rewritten: nearest even or
+    // The second chip's adder (ttsky26d fops.v, rewritten: nearest even or
     // toward zero with amode[2], subnormals kept), bit for bit
     static uint16_t fadd_rev2(uint16_t a_in, uint16_t b_in, bool round_to_zero);
     static uint16_t fmul_rtl(uint16_t a_in, uint16_t b_in);

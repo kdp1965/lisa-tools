@@ -24,7 +24,7 @@ static void usage(const char* prog) {
     printf("                   macro), filled by lines of P clocks (default %d + %d per word), or with\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
     printf("                   stream by a QSPI burst that keeps running (%d per word, a restart of P,\n", InstCache::FILL_PER_WORD);
     printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
-    printf("  --rev2           The second chip (ttsky26c-um-lisa-ttlc): the stack pointer at the\n");
+    printf("  --rev2           The second chip (ttsky26d-um-lisa-ttlc): the stack pointer at the\n");
     printf("                   byte on top of the stack (push decrements first, pop increments\n");
     printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
     printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals), and\n");

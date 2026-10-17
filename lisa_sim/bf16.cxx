@@ -230,7 +230,7 @@ uint16_t BF16Unit::fadd_rtl(uint16_t a_in, uint16_t b_in, bool round_to_zero) {
     return (output_sign ? 0x8000 : 0) | ((e_res & 0xFF) << 7) | ((f_rounded >> 2) & 0x7F);
 }
 
-// The second chip's fadd (ttsky26c-um-lisa-ttlc src/fops.v, rewritten for
+// The second chip's fadd (ttsky26d-um-lisa-ttlc src/fops.v, rewritten for
 // it: RESPIN.md item 4).  Significands are 12 bits {carry, hidden,
 // fraction[6:0], G, R, sticky}; the smaller operand is aligned with the bits
 // it loses folded into the sticky bit, the sum normalized (into the

@@ -92,7 +92,7 @@ public:
     void clear_interrupt(uint8_t mask);
     void set_int_enable(uint8_t mask) { int_en_ = mask; }
     void set_fixed_irq(bool on) { fixed_irq_ = on; }
-    // --rev2: the second chip (ttsky26c-um-lisa-ttlc, RESPIN.md): the
+    // --rev2: the second chip (ttsky26d-um-lisa-ttlc, RESPIN.md): the
     // stack pointer at the byte on top of the stack (push decrements first,
     // pop increments after), swap n(sp) at sp + n, the rewritten bf16 adder,
     // and the fixed interrupt semantics

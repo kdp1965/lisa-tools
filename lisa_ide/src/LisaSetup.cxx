@@ -738,7 +738,7 @@ Kept in .tui_prefs
 ==============================================================================
 */
 // rev2 on|off: which chip's stack convention the source level assumes.  The
-// second chip (ttsky26c) has SP at the byte on top of the stack (push
+// second chip (ttsky26d) has SP at the byte on top of the stack (push
 // decrements first, pop increments after), TT07 one below it; the .cdb
 // reader takes the top's offset from lisa::Cdb::set_sp_top (0 or 1) for the
 // frame unwinding, the locals' addresses and the saved RA.  Kept in
