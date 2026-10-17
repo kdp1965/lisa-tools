@@ -18,6 +18,7 @@
 #include "bf16.h"
 #include "div.h"
 #include "cdb.h"
+#include "icache.h"
 
 class LisaSimulator {
 public:
@@ -57,6 +58,7 @@ public:
     LisaUart&        uart2()  { return uart2_; }
     BF16Unit&        bf16()   { return bf16_; }
     LisaDiv&         div()    { return div_; }
+    InstCache&       icache() { return icache_; }
 
     // Convenience state access
     LisaCoreState get_state() const { return core_.get_state(); }
@@ -91,6 +93,7 @@ private:
     LisaUart        uart2_;
     BF16Unit        bf16_;
     LisaDiv         div_;
+    InstCache       icache_;
     lisa::Cdb       cdb_;
     std::string     firmware_path_;
 

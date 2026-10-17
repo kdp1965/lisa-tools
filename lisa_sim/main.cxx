@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <string>
 
 static void usage(const char* prog) {
@@ -18,6 +19,10 @@ static void usage(const char* prog) {
     printf("     --port PORT\n");
     printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
     printf("                   without the cache; default 32768); addresses wrap\n");
+    printf("  --icache=N[xW][,P][,direct]  Model an instruction cache of N lines of W words (the\n");
+    printf("                   chip: 1x4): P clocks per line fill (default %d + %d per word), LRU\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
+    printf("                   replacement of unaligned lines (flops) or direct-mapped aligned lines\n");
+    printf("                   (a RAM macro); the counts are printed on stderr after a run\n");
     printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
     printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
     printf("                   cflag_save and signed_inversion shadowed. Default: the\n");
@@ -34,6 +39,8 @@ int main(int argc, char** argv) {
     unsigned long ram_bytes = 0;
     bool fixed_irq = false;
     bool trace = false;
+    int icache_lines = 0, icache_words = 4, icache_penalty = 0;
+    bool icache_direct = false;
     uint64_t max_cycles = 0;
     int max_steps = 0;
     std::string serial_port;
@@ -55,6 +62,16 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             max_steps = atoi(argv[++i]);
             auto_run = true;
+        } else if (strncmp(argv[i], "--icache=", 9) == 0) {
+            char* p = argv[i] + 9;
+            icache_lines = (int)strtol(p, &p, 0);
+            if (*p == 'x') icache_words = (int)strtol(p + 1, &p, 0);
+            if (*p == ',' && isdigit((unsigned char)p[1])) icache_penalty = (int)strtol(p + 1, &p, 0);
+            if (*p == ',' && strcmp(p + 1, "direct") == 0) { icache_direct = true; p += strlen(p); }
+            if (icache_lines < 1 || icache_words < 1 || *p) {
+                fprintf(stderr, "Error: --icache=N[xW][,P][,direct] with N and W >= 1\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "--fixed-irq") == 0) {
             fixed_irq = true;
         } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
@@ -81,6 +98,8 @@ int main(int argc, char** argv) {
         sim.memory().set_data_size(ram_bytes);
     if (fixed_irq)
         sim.core().set_fixed_irq(true);
+    if (icache_lines)
+        sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct);
 
     if (!firmware_file.empty()) {
         if (sim.load_firmware(firmware_file)) {
@@ -125,6 +144,8 @@ int main(int argc, char** argv) {
                (unsigned long long)st.cycle_count);
         printf("PC=%04X A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
                st.pc, st.a, st.ix, st.sp, st.zflag, st.cflag);
+        if (sim.icache().enabled())     // stderr: stdout is the program's output
+            fputs(sim.icache().report().c_str(), stderr);
 
         if (batch) return 0;
     }

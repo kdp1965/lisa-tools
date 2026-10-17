@@ -1,4 +1,5 @@
 #include "core.h"
+#include "icache.h"
 #include "memory.h"
 #include "periph.h"
 #include "bf16.h"
@@ -260,6 +261,7 @@ int LisaCore::step() {
     // instruction (not after sra/lra/push ix/pop ix/ldxx/stxx/div/fops),
     // with the cond[1] the instruction found - before its own update.
     uint8_t cond_before = cond_;
+    uint16_t pc_before = pc_;
     uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
     bool skipped = !(cond_ & 1) && !ldx_stage_two_;
     bool two_stage = !skipped && (
@@ -270,6 +272,8 @@ int LisaCore::step() {
     int cycles = step_inst();
     if (!halted_)
         do_interrupt(cond_before, two_stage);
+    if (icache_ && !halted_)
+        icache_->retire(pc_before, pc_, cycles);
     return cycles;
 }
 
@@ -286,6 +290,7 @@ int LisaCore::step_inst() {
     // Fetch instruction
     uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
     last_inst_ = inst;
+    if (icache_) icache_->fetch(pc_ & PC_MASK);
     int cycles = 1;
 
     // Trace callback

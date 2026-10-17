@@ -2,6 +2,8 @@
 #
 #   make            build every test program (.ihx)
 #   make check      build and run them on the C++ simulator (../lisa_sim)
+#   make icache     the instruction cache study: misses and clocks per instruction
+#                   for several cache shapes (icache_sweep.py, lisa_sim --icache)
 #   make asm        keep the generated assembly (*.asm) for inspection
 #
 # Self-checking tests print "ok NNNN" / "FAIL NNNN" per case and end with
@@ -72,6 +74,9 @@ check: all
 	done; \
 	echo "$$pass passed, $$fail failed"; test $$fail -eq 0
 
+icache: all
+	@python3 ./icache_sweep.py
+
 asm: $(TESTS:%=%.asm)
 
 %.asm: %.c harness.h
@@ -80,4 +85,4 @@ asm: $(TESTS:%=%.asm)
 clean:
 	rm -f *.ihx *.asm *.lst *.rel *.sym *.map *.lk *.cdb *.adb *.diff *.noi
 
-.PHONY: all check asm clean
+.PHONY: all check icache asm clean

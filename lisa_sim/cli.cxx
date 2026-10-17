@@ -134,6 +134,7 @@ bool LisaCli::process_command(const std::string& line) {
     else if (cmd == "serial" || cmd == "ser")              cmd_serial(args);
     else if (cmd == "bf16" || cmd == "f")                  cmd_bf16();
     else if (cmd == "info" || cmd == "i")                  cmd_info();
+    else if (cmd == "icache")                              cmd_icache(args);
     else if (cmd == "break" || cmd == "b")                 cmd_break(args);
     else if (cmd == "list")                                cmd_list(args);
     else if (cmd == "next" || cmd == "n")                  cmd_next(false);
@@ -176,6 +177,7 @@ void LisaCli::cmd_help() {
     printf("  bpc                  Clear all breakpoints\n");
     printf("  dis [addr] [count]   Disassemble (default at PC, 10 insns)\n");
     printf("  trace on|off         Toggle instruction trace\n");
+    printf("  icache [N[xW] [P] [direct]|off]  Model an N-line instruction cache of W words / show its counts\n");
     printf("  periph               Show peripheral state\n");
     printf("  uart <text>          Send text to UART1\n");
     printf("  serial <port> [1|2]  Connect UART to host serial port\n");
@@ -1117,4 +1119,38 @@ void LisaCli::cmd_cdb(const std::vector<std::string>& args) {
     report_cdb();
     for (const std::string& f : cdb.files())
         printf("  %s: %s\n", f.c_str(), cdb.source_lines(f) ? "found" : "not found");
+}
+
+// icache: the instruction cache model (icache.h).  `icache` shows the
+// counts since the last configure/reset; `icache N[xW] [P] [direct]` models
+// N lines of W words (4) with a fill of P clocks (the QSPI cost of W words),
+// LRU on unaligned lines unless direct (a macro's direct-mapped aligned
+// lines); `icache off`.
+void LisaCli::cmd_icache(const std::vector<std::string>& args) {
+    InstCache& ic = sim_.icache();
+    if (args.size() < 2) {
+        fputs(ic.report().c_str(), stdout);
+        return;
+    }
+    if (args[1] == "off") {
+        ic.configure(0);
+        printf("icache: off\n");
+        return;
+    }
+    size_t x = args[1].find('x');
+    int lines = (int)parse_number(args[1].substr(0, x));
+    int words = x == std::string::npos ? 4 : (int)parse_number(args[1].substr(x + 1));
+    int penalty = 0;
+    bool direct = false;
+    for (size_t i = 2; i < args.size(); i++) {
+        if (args[i] == "direct") direct = true;
+        else if (args[i] == "lru") direct = false;
+        else penalty = (int)parse_number(args[i]);
+    }
+    if (lines < 1 || words < 1) {
+        printf("icache: N and W must be at least 1 (the chip: 1x4)\n");
+        return;
+    }
+    ic.configure(lines, words, penalty, direct);
+    printf("icache: %s (counting from here)\n", ic.describe().c_str());
 }

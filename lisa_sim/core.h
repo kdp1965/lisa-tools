@@ -9,6 +9,7 @@
 class LisaMemory;
 struct BF16Unit;
 struct LisaDiv;
+class InstCache;
 
 // Forward declaration for peripherals
 class LisaPeripherals;
@@ -50,6 +51,7 @@ public:
     void set_peripherals(LisaPeripherals* periph) { periph_ = periph; }
     void set_bf16(BF16Unit* bf16) { bf16_ = bf16; }
     void set_div(LisaDiv* div) { div_ = div; }
+    void set_icache(InstCache* c) { icache_ = c; }   // the instruction cache model (icache.h)
 
     // Execute one full instruction (returns number of cycles taken)
     int step();
@@ -158,6 +160,7 @@ private:
     LisaPeripherals*  periph_;
     BF16Unit*         bf16_;
     LisaDiv*          div_;
+    InstCache*        icache_ = nullptr;
     TraceCallback     trace_cb_;
 
     // Internal helpers

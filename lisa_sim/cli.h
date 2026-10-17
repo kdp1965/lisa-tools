@@ -45,6 +45,7 @@ private:
     void cmd_serial(const std::vector<std::string>& args);
     void cmd_bf16();
     void cmd_info();
+    void cmd_icache(const std::vector<std::string>& args);
 
     // Source-level commands (the .cdb sdcc --debug writes, see ../lisa_cdb)
     void cmd_break(const std::vector<std::string>& args);

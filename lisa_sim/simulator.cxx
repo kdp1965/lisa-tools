@@ -18,6 +18,7 @@ void LisaSimulator::connect_modules() {
     core_.set_peripherals(&periph_);
     core_.set_bf16(&bf16_);
     core_.set_div(&div_);
+    core_.set_icache(&icache_);
     periph_.set_uart1(&uart1_);
     periph_.set_uart2(&uart2_);
 }
@@ -31,6 +32,7 @@ void LisaSimulator::reset() {
     uart2_.reset();
     bf16_.reset();
     div_.reset();
+    icache_.reset();
     running_ = false;
     stop_requested_ = false;
     connect_modules();
@@ -40,6 +42,7 @@ bool LisaSimulator::load_firmware(const std::string& filename) {
     if (!memory_.load_hex(filename))
         return false;
     firmware_path_ = filename;
+    icache_.reset();                // as the chip invalidates its cache on a program load
     // the debug information beside it: firmware.ihx -> firmware.cdb
     std::string base = filename;
     size_t dot = base.find_last_of('.');
