@@ -3,6 +3,11 @@
  * compares, integer and float conversions.  The expected bit patterns
  * were computed with IEEE single arithmetic rounded to bf16 (the
  * values here are exact in bf16, so the rounding mode does not matter).
+ *
+ * The hardware adder differs between the chips: the TT07 silicon's has
+ * two defects (lisa_sim models them; bf16_add is software because of
+ * them) and the respin's is a correct one, rounding to nearest even, so
+ * checks 33-35 first probe which adder is there with 1.75 + 1.75.
  */
 #include "harness.h"
 #include <lisa/bf16.h>
@@ -15,6 +20,8 @@ volatile float f12_34 = 12.34f, fm2_5 = -2.5f;
 
 int main(void)
 {
+  unsigned char rev2;
+
   /* add, sub, mul, div: operand order and sign */
   CHECK(1, bf16_add(b1_5, b2_5) == b4);
   CHECK(2, bf16_add(b2_5, b1_5) == b4);
@@ -51,11 +58,16 @@ int main(void)
   CHECK(30, bf16_from_float(bf16_to_float(bpi)) == bpi);
   /* a chain: the area of a circle, r = 2.5: pi * 2.5 * 2.5 = 19.6 (fmul truncates: 19.5, not 19.625) */
   CHECK(31, bf16_mul(bf16_mul(bpi, b2_5), b2_5) == 0x419c);
-  /* the adder's two silicon defects, and the software add getting them right */
-  CHECK(33, bf16_fadd_raw(0x3fa0, 0x3fa0) == 0x4010 && bf16_add(0x3fa0, 0x3fa0) == 0x4020);     /* 1.25 + 1.25 */
-  CHECK(34, bf16_fadd_raw(0x2e00, 0xa9d0) == 0x2d80 && bf16_add(0x2e00, 0xa9d0) == 0x2dff);     /* 2^-35 - 1.625 * 2^-44: half the value from the adder */
-  CHECK(35, bf16_add(b1_5, b0_1) == 0x3fcd && bf16_add(b100, b0_1) == b100 && bf16_sub(b0_1, b1_5) == 0xbfb3);  /* 1.6, 100.1 -> 100, -1.4 */
-  CHECK(36, bf16_add(0x7f7f, 0x7f7f) == BF16_INF && bf16_add(BF16_INF, BF16_NEG_INF) == BF16_NAN && bf16_add(0x0080, 0x0080) == 0x0100);
+  /* the TT07 adder's two silicon defects, or the respin's adder getting them
+     right, and the software add right on both */
+  rev2 = bf16_fadd_raw(0x3fe0, 0x3fe0) == 0x4060;                                   /* 1.75 + 1.75 = 3.5 (TT07: 2.75) */
+  CHECK(33, bf16_fadd_raw(0x3fa0, 0x3fa0) == (rev2 ? 0x4020 : 0x4010) && bf16_add(0x3fa0, 0x3fa0) == 0x4020);     /* 1.25 + 1.25 (TT07: 2.25) */
+  CHECK(34, bf16_fadd_raw(0x2e00, 0xa9d0) == (rev2 ? 0x2dff : 0x2d80) && bf16_add(0x2e00, 0xa9d0) == 0x2dff);     /* 2^-35 - 1.625 * 2^-44 (TT07: half the value) */
+  /* the respin's adder on the vectors below: nearest even, infinities, NaN, the smallest normals */
+  CHECK(35, !rev2 || (bf16_fadd_raw(b1_5, b0_1) == 0x3fcd && bf16_fadd_raw(b100, b0_1) == b100 && bf16_fadd_raw(b0_1, bf16_neg(b1_5)) == 0xbfb3
+                      && bf16_fadd_raw(0x7f7f, 0x7f7f) == BF16_INF && bf16_fadd_raw(BF16_INF, BF16_NEG_INF) == BF16_NAN && bf16_fadd_raw(0x0080, 0x0080) == 0x0100));
+  CHECK(36, bf16_add(b1_5, b0_1) == 0x3fcd && bf16_add(b100, b0_1) == b100 && bf16_sub(b0_1, b1_5) == 0xbfb3);  /* 1.6, 100.1 -> 100, -1.4 */
+  CHECK(37, bf16_add(0x7f7f, 0x7f7f) == BF16_INF && bf16_add(BF16_INF, BF16_NEG_INF) == BF16_NAN && bf16_add(0x0080, 0x0080) == 0x0100);
   CHECK(32, bf16_to_uint(bf16_mul(bf16_mul(bpi, b2_5), b2_5)) == 19);
 
   DONE();
