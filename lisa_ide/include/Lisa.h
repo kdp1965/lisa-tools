@@ -184,6 +184,7 @@ private:
     bool                EnableSpiRam(const LisaSetupCfg& cfg, std::string& why);
     int                 SpiRam(int argc, char* argv[]);
     int                 Rev2(int argc, char* argv[]);
+    void                DetectRevision(void);
     void                OpenSetupTab(void);
     void                CloseSetupTab(void);
     bool                IsSetupTab(void);

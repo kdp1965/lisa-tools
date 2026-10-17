@@ -141,7 +141,7 @@ void CLisa::Reclaim(void)
     usleep(20000);
     m_LisaHasUart = false;
     WriteUartString("v");
-    AwaitString("lisav1", 6, 50);
+    AwaitString("lisav", 6, 50);
     m_pTui->m_WatchPaused = 0;
 }
 

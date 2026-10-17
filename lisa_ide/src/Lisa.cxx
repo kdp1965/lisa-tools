@@ -48,7 +48,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"where",   0, 0, &CLisa::Where,   "",              "The source line at PC"},
     {"setup",   0, 1, &CLisa::Setup,   "[apply|defaults]", "The SETUP tab: chip selects, bases, SPI/QSPI, cache, muxes"},
     {"spiram",  1, 1, &CLisa::SpiRam,  "on|off",        "The data cache on the RP2040's emulated SPI RAM (CS1), or off"},
-    {"rev2",    0, 1, &CLisa::Rev2,    "[on|off]",      "The second chip's stack convention (SP at the top byte) for the source level"},
+    {"rev2",    0, 1, &CLisa::Rev2,    "[on|off]",      "The second chip's stack convention (SP at the top byte) for the source level; set at connect from the debugger version"},
     {"help",    0, 1, &CLisa::Help,    "[command]",     "List the commands, or explain one"},
     {nullptr,   0, 0, nullptr,         nullptr,         nullptr}
 };
@@ -2029,7 +2029,7 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  connect does it again. Programs must be built for it (sdcc --tt07-cache).\n"
                 "  off: the cache off (the 128-byte RAM), the other settings kept.\n"
                 "  The SETUP tab's cache on/off does the same with its own settings."},
-    {"rev2",    "rev2 [on|off]\n"
+    {"rev2",    "rev2 [on|off]   (connect sets it: the debugger answers lisav2.0 on the second chip, lisav1.2 on TT07)\n"
                 "  on: the chip is the second one (ttsky26d): push decrements SP before the\n"
                 "  write and pop increments after the read, so SP is the byte on top of the\n"
                 "  stack and 0(sp) the top of a frame; the .cdb reader (locals, print, bt,\n"
@@ -2439,7 +2439,9 @@ int CLisa::Connect(int argc, char* argv[])
     WriteUartString("\n");
     usleep(20000);
     WriteUartString("v");
-    if (!AwaitString("lisav1", 6, 50))
+    if (AwaitString("lisav", 6, 50))
+        DetectRevision();
+    else
     {
         Printf("Trying Hayes escape sequence (+++)...");
         WriteUartString("+++");

@@ -27,7 +27,8 @@ registers), `reset`, `term`, `ls`, `sp`, `pc`, and the source level: `debug`,
 `setup` (the SETUP tab), and `rev2 on|off`: the second chip's stack
 convention (SP at the byte on top of the stack, `0(sp)` the top of a frame;
 programs built with `sdcc --rev2`) for the source level's frames, kept in
-`.tui_prefs`; off is TT07 (SP one below the top). The chip cannot be asked.
+`.tui_prefs`; off is TT07 (SP one below the top). `connect` sets it from
+the debugger's version: the second chip answers `lisav2.0`, TT07 `lisav1.2`.
 
 ## Programming (`src/LisaFlash.cxx`)
 

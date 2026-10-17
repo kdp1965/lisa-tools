@@ -228,7 +228,7 @@ int CLisa::Load(int argc, char* argv[])
     WriteUartString("\n");
     usleep(20000);
     WriteUartString("v");
-    AwaitString("lisav1", 6, 50);
+    AwaitString("lisav", 6, 50);
     m_Shift.clear();
     if (ret != 0)
         return 1;

@@ -784,3 +784,32 @@ void CLisa::RestoreOtherPref(char *pPref, char *pStr)
 }
 
 // vim: sw=4 ts=4 et
+
+/*
+==============================================================================
+The debugger's version string, just received into m_Response, names the
+chip: TT07 answers lisav1.2, the second chip (ttsky26d) lisav2.0, and the
+major digit is the revision - so the rev2 setting follows it at connect
+(kept in .tui_prefs as if typed).
+==============================================================================
+*/
+void CLisa::DetectRevision(void)
+{
+    size_t pos = m_Response.find("lisav");
+    if (pos == std::string::npos || pos + 5 >= m_Response.size())
+        return;
+    char major = m_Response[pos + 5];
+    if (major < '0' || major > '9')
+        return;
+    bool rev2 = major >= '2';
+    size_t end = m_Response.find_first_of("\r\n", pos);
+    std::string ver = m_Response.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+    if (rev2 != m_Rev2)
+    {
+        m_Rev2 = rev2;
+        lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
+        m_pParent->WriteUIPreferences();
+    }
+    Printf("Debugger %s: %s, rev2 %s", ver.c_str(),
+           rev2 ? "the second chip" : "the TT07 chip", m_Rev2 ? "on" : "off");
+}
