@@ -48,6 +48,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"where",   0, 0, &CLisa::Where,   "",              "The source line at PC"},
     {"setup",   0, 1, &CLisa::Setup,   "[apply|defaults]", "The SETUP tab: chip selects, bases, SPI/QSPI, cache, muxes"},
     {"spiram",  1, 1, &CLisa::SpiRam,  "on|off",        "The data cache on the RP2040's emulated SPI RAM (CS1), or off"},
+    {"rev2",    0, 1, &CLisa::Rev2,    "[on|off]",      "The second chip's stack convention (SP at the top byte) for the source level"},
     {"help",    0, 1, &CLisa::Help,    "[command]",     "List the commands, or explain one"},
     {nullptr,   0, 0, nullptr,         nullptr,         nullptr}
 };
@@ -131,6 +132,7 @@ CLisa::CLisa(CTui *pTui)
     m_noSyntaxHilight = 0;
     m_WorkingDir      = ".";
     m_PrefsFile       = ".tui_prefs";
+    m_Rev2            = false;              // TT07 until `rev2 on` (kept in .tui_prefs)
     m_pAttachedSrc    = NULL;
     m_Running         = -1;
     m_HaltDetected    = 0;
@@ -2027,6 +2029,13 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  connect does it again. Programs must be built for it (sdcc --tt07-cache).\n"
                 "  off: the cache off (the 128-byte RAM), the other settings kept.\n"
                 "  The SETUP tab's cache on/off does the same with its own settings."},
+    {"rev2",    "rev2 [on|off]\n"
+                "  on: the chip is the second one (ttsky26c): push decrements SP before the\n"
+                "  write and pop increments after the read, so SP is the byte on top of the\n"
+                "  stack and 0(sp) the top of a frame; the .cdb reader (locals, print, bt,\n"
+                "  next, finish) counts frames from there. Programs are built with\n"
+                "  sdcc --rev2. off: TT07, SP one below the top (1(sp)). Kept in .tui_prefs;\n"
+                "  without an argument shows the setting. The chip cannot be asked."},
     {"debug",   "debug <prog.ihx>\n"
                 "  Loads the program image and the .cdb that `sdcc -mlisa --debug` writes\n"
                 "  beside it, opens each C source in a tab (-> marks the PC's line, * a\n"

@@ -183,6 +183,7 @@ private:
     bool                Sideband(const char *line, std::string& out, int timeoutMs);
     bool                EnableSpiRam(const LisaSetupCfg& cfg, std::string& why);
     int                 SpiRam(int argc, char* argv[]);
+    int                 Rev2(int argc, char* argv[]);
     void                OpenSetupTab(void);
     void                CloseSetupTab(void);
     bool                IsSetupTab(void);
@@ -277,6 +278,7 @@ private:
     std::map<uint16_t, std::pair<uint16_t, int> > m_Shift;
     std::string         m_OutLine;          // the program's output, a partial line
     bool                m_ImagesOnly;       // file completion offers program images only
+    bool                m_Rev2;             // the second chip's stack convention (rev2 on|off, saved in .tui_prefs)
     LisaSetupCfg        m_Setup;            // applied on connect, saved in .tui_prefs
     LisaSetupCfg        m_SetupEdit;        // the SETUP tab's copy until OK
     lisa_src_t        * m_pSetupSrc;

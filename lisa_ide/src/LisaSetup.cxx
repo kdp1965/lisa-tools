@@ -737,9 +737,35 @@ int CLisa::SetupKey(int key)
 Kept in .tui_prefs
 ==============================================================================
 */
+// rev2 on|off: which chip's stack convention the source level assumes.  The
+// second chip (ttsky26c) has SP at the byte on top of the stack (push
+// decrements first, pop increments after), TT07 one below it; the .cdb
+// reader takes the top's offset from lisa::Cdb::set_sp_top (0 or 1) for the
+// frame unwinding, the locals' addresses and the saved RA.  Kept in
+// .tui_prefs like the setup.  Nothing on the chip says which it is.
+int CLisa::Rev2(int argc, char* argv[])
+{
+    if (argc >= 2)
+    {
+        if (strcmp(argv[1], "on") && strcmp(argv[1], "off"))
+        {
+            Printf("Usage: rev2 [on|off]");
+            return 1;
+        }
+        m_Rev2 = strcmp(argv[1], "on") == 0;
+        lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
+        m_pParent->WriteUIPreferences();
+    }
+    Printf("rev2 %s: %s", m_Rev2 ? "on" : "off",
+           m_Rev2 ? "the second chip, SP at the top byte (0(sp)); programs built with sdcc --rev2"
+                  : "TT07, SP one below the top (1(sp))");
+    return 0;
+}
+
 void CLisa::SaveWatchItems(FILE *fd)
 {
     fprintf(fd, "LISA_SETUP=%s\n", m_Setup.Serialize().c_str());
+    fprintf(fd, "LISA_REV2=%d\n", m_Rev2 ? 1 : 0);
 }
 
 void CLisa::RestoreOtherPref(char *pPref, char *pStr)
@@ -749,6 +775,11 @@ void CLisa::RestoreOtherPref(char *pPref, char *pStr)
         LisaSetupCfg c = LisaSetupCfg::Defaults();
         if (c.Parse(pStr))
             m_Setup = c;
+    }
+    else if (strcmp(pPref, "LISA_REV2") == 0)
+    {
+        m_Rev2 = atoi(pStr) != 0;
+        lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
     }
 }
 

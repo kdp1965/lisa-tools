@@ -24,7 +24,10 @@ program), `break`/`delete`/`br`, `run`/`halt`/`stop`, `step` (one
 instruction, the chip's step bit), `set reg=val`, `read`/`write` (debugger
 registers), `reset`, `term`, `ls`, `sp`, `pc`, and the source level: `debug`,
 `next`/`n`, `into`, `finish`, `print`/`p`, `locals`, `bt`, `where`, and
-`setup` (the SETUP tab).
+`setup` (the SETUP tab), and `rev2 on|off`: the second chip's stack
+convention (SP at the byte on top of the stack, `0(sp)` the top of a frame;
+programs built with `sdcc --rev2`) for the source level's frames, kept in
+`.tui_prefs`; off is TT07 (SP one below the top). The chip cannot be asked.
 
 ## Programming (`src/LisaFlash.cxx`)
 
