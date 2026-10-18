@@ -50,6 +50,11 @@ namespace PeriphReg {
     constexpr uint8_t TIM2_CTRL       = 0x1C;
     constexpr uint8_t TIM2_COUNT      = 0x1D;
 
+    // UART2's baud divisor (the second chip, RESPIN 23: a bit is 32 x (d + 1)
+    // clocks; TT07 wrote it on any access to 0x14).  Not modelled: the
+    // simulator's UARTs have no baud rate
+    constexpr uint8_t UART2_BRG       = 0x1E;
+
     // I2C
     constexpr uint8_t I2C_PRESCALE_LO = 0x20;
     constexpr uint8_t I2C_PRESCALE_HI = 0x21;
