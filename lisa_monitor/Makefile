@@ -2,7 +2,7 @@
 # SDCC port for the TT07 chip's data cache (32K SRAM emulated by the
 # demo board's RP2040, see sdcc-lisa/README-lisa.md).
 #
-#   make            monitor.ihx, and monitor_small.ihx for the 128-byte RAM
+#   make            monitor.ihx, monitor_small.ihx for the 128-byte RAM, monitor_rev2.ihx for the second chip
 #   make board      program the board, set the cache up, start it and leave
 #                   the console attached: then  socat -,raw,echo=0 TCP:localhost:5555
 #   make board-small  the same with monitor_small.ihx (no SPI RAM, no cache)
@@ -15,7 +15,7 @@ SIM    ?= ../lisa_sim/lisa_sim
 NODE   ?= node
 TEST   ?= ../../tt07-um-lisa-ttlc/lisa-test/test
 
-all: monitor.ihx monitor_small.ihx
+all: monitor.ihx monitor_small.ihx monitor_rev2.ihx
 
 monitor.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib)
 	$(SDCC) -mlisa --debug --tt07-cache -o $@ $<
@@ -23,6 +23,11 @@ monitor.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/li
 # the 128-byte RAM, nothing special on the board: calc in bf16 only
 monitor_small.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib)
 	$(SDCC) -mlisa --debug -DSMALL -o $@ $<
+
+# the second chip (ttsky26d, 2026-10-18): its stack convention and library, the
+# 32K data space through the data cache (the FPGA: CACHE=1 arty_run.py)
+monitor_rev2.ihx: monitor.c $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib)
+	$(SDCC) -mlisa --debug --rev2 --stack-loc 0x7fff -o $@ $<
 
 board: monitor.ihx
 	cd $(TEST) && $(NODE) hw_test.mjs connect monitor=$(CURDIR)/monitor.ihx

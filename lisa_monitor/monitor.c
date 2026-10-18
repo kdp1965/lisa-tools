@@ -201,7 +201,11 @@ static void banner(void)
 #ifdef SMALL
   puts("lisa_monitor, sdcc -mlisa, the 128-byte RAM: type help");
 #else
+#ifdef __SDCC_LISA_REV2
+  puts("lisa_monitor, sdcc -mlisa --rev2 (the second chip): type help");
+#else
   puts("lisa_monitor, sdcc -mlisa --tt07-cache: type help");
+#endif
 #endif
   putnl();
 }
