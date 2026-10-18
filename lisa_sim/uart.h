@@ -28,6 +28,15 @@ public:
     // Status byte for register read
     uint8_t  status() const;
 
+    // The second chip's receiver (--rev2, RESPIN 14): an 8-byte FIFO fed one
+    // byte per char_cycles (bytes from the host or the CLI wait in a queue,
+    // as they would on the wire), a byte arriving with the FIFO full is
+    // dropped and sets the overrun flag (status bit 2) until the FIFO has
+    // been read empty.  depth 0 (the default, TT07): unbounded, instant
+    void     set_rx_fifo(int depth, uint32_t char_cycles) { fifo_depth_ = depth; char_cycles_ = char_cycles; }
+    void     advance(uint32_t cycles);  // simulated time passes: deliver queued bytes
+    bool     rx_overrun() const { return overrun_; }
+
     // Host serial port bridge
     bool     connect_host(const char* port_name);
     void     disconnect_host();
@@ -41,7 +50,12 @@ private:
     std::queue<uint8_t> tx_out_;  // Bytes transmitted (host reads these)
 
     // RX side
-    std::queue<uint8_t> rx_buf_;  // Bytes received (from host injection)
+    std::queue<uint8_t> rx_buf_;  // Bytes received (the FIFO the program reads)
+    std::queue<uint8_t> rx_wire_; // ... waiting their turn on the wire (--rev2 pacing)
+    int      fifo_depth_ = 0;
+    uint32_t char_cycles_ = 0;
+    uint32_t wire_wait_ = 0;      // cycles until the next byte lands in the FIFO
+    bool     overrun_ = false;
 
     // Host serial port bridge
     ser_params_t* host_serial_;

@@ -29,7 +29,9 @@ static void usage(const char* prog) {
     printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
     printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals),\n");
     printf("                   --fixed-irq, and the bank registers [p:0x15..0x17] (code / data /\n");
-    printf("                   stack bank of the upper 16K: 512 KB of code, 256 KB of data).\n");
+    printf("                   stack bank of the upper 16K: 512 KB of code, 256 KB of data),\n");
+    printf("                   the 8-byte UART receive FIFOs with the overrun flag (status\n");
+    printf("                   bit 2; host bytes arrive one per 1085 clocks).\n");
     printf("                   Default: the TT07 silicon\n");
     printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
     printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
@@ -116,6 +118,10 @@ int main(int argc, char** argv) {
     if (rev2) {
         sim.core().set_rev2(true);
         sim.periph().set_rev2(true);   // the bank registers 0x15-0x17 (RESPIN 22)
+        // the 8-byte receive FIFOs with the overrun flag (RESPIN 14); bytes
+        // from the host arrive one per 1085 clocks (460800 baud at 50 MHz)
+        sim.uart1().set_rx_fifo(8, 1085);
+        sim.uart2().set_rx_fifo(8, 1085);
         lisa::Cdb::set_sp_top(0);      // the frames of sdcc --rev2 start at 0(sp)
     }
     if (icache_lines >= 0)

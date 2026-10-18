@@ -61,9 +61,11 @@ int LisaSimulator::step() {
     }
     // Propagate peripheral interrupts to core
     core_.set_int_enable(periph_.get_interrupts());
-    // Poll host serial ports for incoming data
+    // Poll host serial ports for incoming data, and let queued bytes land
     uart1_.poll_host();
     uart2_.poll_host();
+    uart1_.advance((uint32_t) cycles);
+    uart2_.advance((uint32_t) cycles);
     check_uart_output();
     return cycles;
 }
@@ -212,7 +214,7 @@ void LisaSimulator::set_trace(bool on) {
     if (on) {
         core_.set_trace_callback([this](uint16_t pc, uint16_t inst, const LisaCoreState&) {
             char buf[128];
-            uint16_t next = memory_.inst_read((pc + 1) & 0x7FFF);
+            uint16_t next = memory_.inst_read(core_.code_pa(pc + 1));
             uint16_t sp;
             sp = core_.get_state().sp;
             std::string dis = lisa_disasm(inst, pc, next);
@@ -221,10 +223,10 @@ void LisaSimulator::set_trace(bool on) {
                      core_.get_state().a, core_.get_state().ix, sp, 
                      core_.get_state().ra,
                      core_.get_state().zflag ? 'Z' : '.', core_.get_state().cflag ? 'C' : '.',
-                     memory_.data_read(sp),
-                     memory_.data_read(sp+1),
-                     memory_.data_read(sp+2),
-                     memory_.data_read(sp+3)
+                     memory_.data_read(core_.data_pa(sp, true)),
+                     memory_.data_read(core_.data_pa(sp+1, true)),
+                     memory_.data_read(core_.data_pa(sp+2, true)),
+                     memory_.data_read(core_.data_pa(sp+3, true))
                      );
             if (output_cb_) {
                 output_cb_(std::string(buf) + "\n");
