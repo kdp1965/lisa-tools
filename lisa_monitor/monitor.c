@@ -4,7 +4,9 @@
  *
  *   monitor.ihx        sdcc -mlisa --tt07-cache: the 32K data space behind
  *                      the data cache (data below 0x3800, the stack at
- *                      0x7fff), which needs the RP2040's SPI RAM emulation
+ *                      0x7fff), which needs the RP2040's SPI RAM emulation;
+ *   monitor_rev2.ihx   sdcc -mlisa --rev2: the second chip, whose cache is
+ *                      whole, so data runs up to the 2K stack at 0x7800
  *   monitor_small.ihx  sdcc -mlisa -DSMALL: the chip's 128-byte RAM, nothing
  *                      special on the board
  *
@@ -215,6 +217,10 @@ static void banner(void)
 #ifdef SMALL
 #define DATA_LIMIT 0x80u            /* the 128-byte RAM: data up, the stack down */
 #define STACK_TOP  0x7fu
+#elif defined(__SDCC_LISA_REV2)
+#define DATA_LIMIT 0x7800u          /* --rev2: the cache is whole, data up to the 2K stack */
+#define STACK_TOP  0x7fffu
+#define STACK_LOW  0x7800u
 #else
 #define DATA_LIMIT 0x3800u          /* --tt07-cache, 2K stack: the stack's alias */
 #define STACK_TOP  0x7fffu
@@ -440,7 +446,11 @@ static void cmd_free(void)
 #ifdef SMALL
   puts(" bytes, the stack's; so is the line once parsed)");
 #else
+  #ifdef __SDCC_LISA_REV2
+  puts(" bytes up to the stack at ");
+#else
   puts(" bytes up to the stack's alias at ");
+#endif
   puthex4(DATA_LIMIT);
   putc(')');
 #endif
