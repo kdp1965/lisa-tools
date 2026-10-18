@@ -901,7 +901,7 @@ static void run(unsigned char mode)
         return;
       }
 #ifndef SMALL
-      if (mode != 1)
+      if (mode == 0 || mode == 2)
         fstk[sp] = cf[k];
       else
 #endif
@@ -932,10 +932,11 @@ static void run(unsigned char mode)
         }
       } else {
 #ifndef SMALL
-        fstk[sp - 1] = fstk[sp];
-#else
-        bstk[sp - 1] = bstk[sp];
+        if (mode == 2)                  /* the float pass's moves alone, or the bf16 pass's (3) */
+          fstk[sp - 1] = fstk[sp];
+        else
 #endif
+        bstk[sp - 1] = bstk[sp];
       }
     }
   }
@@ -953,6 +954,7 @@ static void timer_set(unsigned int prediv)
   TIMER1_CTRL = TIMER_CTRL_ENABLE;
 }
 
+#ifdef SMALL
 /* the time run(mode) takes, in 10 us units - 16-bit arithmetic throughout,
    the 32-bit helpers' frames being what the 128-byte build cannot afford.
    COUNT is 8 bits and a wrap cannot be seen, so a coarse pass with 1 ms
@@ -973,7 +975,32 @@ static unsigned int timed(unsigned char mode)
   TIMER1_CTRL = 0;
   return n * tick;
 }
+#else
+/* the time run(mode) takes, in 0.1 us units, 32 bits.  COUNT is 8 bits
+   and a wrap cannot be seen, so the passes go from 1 ms ticks down a
+   decade at a time while the count is 24 or less (the next tick's 250
+   steps then cover it), to 0.1 us, five clocks at 50 MHz: the FPU's add
+   is a microsecond or two, which read as 0 us at the 10 us ticks the
+   128-byte build is limited to (2026-10-18). */
+#define TICK01 ((unsigned int)(CLOCK_HZ / 10000000))    /* clocks in 0.1 us */
+static unsigned long timed(unsigned char mode)
+{
+  unsigned long tick = 10000;           /* 0.1 us units: a millisecond first */
+  unsigned char n;
+  for (;;) {
+    timer_set((unsigned int)(tick * TICK01) - 1);
+    run(mode);
+    n = TIMER1_COUNT;
+    if (n > 24 || tick == 1)
+      break;
+    tick /= 10;
+  }
+  TIMER1_CTRL = 0;
+  return n * tick;
+}
+#endif
 
+#ifdef SMALL
 /* 10 us units as microseconds, or milliseconds with two decimals from
    10 ms, right-aligned in nine characters */
 static void put_time(unsigned int t10)
@@ -992,6 +1019,38 @@ static void put_time(unsigned int t10)
   putc('0' + t10 % 10);
   puts(" ms");
 }
+#else
+/* 0.1 us units: tenths of a microsecond below a millisecond, microseconds
+   below ten, else milliseconds with two decimals; right-aligned in nine */
+static void put_time(unsigned long t01)
+{
+  unsigned int u;
+  if (t01 < 10000ul) {
+    u = (unsigned int)t01;
+    pad(4 - digits(u / 10));
+    putdec(u / 10);
+    putc('.');
+    putc('0' + u % 10);
+    puts(" us");
+    return;
+  }
+  if (t01 < 100000ul) {
+    u = (unsigned int)(t01 / 10);
+    pad(6 - digits(u));
+    putdec(u);
+    puts(" us");
+    return;
+  }
+  u = (unsigned int)(t01 / 10000);
+  pad(3 - digits(u));
+  putdec(u);
+  putc('.');
+  u = (unsigned int)((t01 % 10000) / 100);
+  putc('0' + u / 10);
+  putc('0' + u % 10);
+  puts(" ms");
+}
+#endif
 
 static void cmd_calc(char *p)
 {
@@ -999,7 +1058,7 @@ static void cmd_calc(char *p)
 #define ovh (*(unsigned int *)(line + LINE - 4))   /* the interpreter's time: in the line, dead once compiled */
   unsigned int tb;
 #else
-  unsigned int ovh, tb, tf;
+  unsigned long ovh, ovb, tb, tf;      /* the float and the bf16 pass's own overheads */
   float f, bf;
 #endif
   cp = skip(p);
@@ -1026,6 +1085,8 @@ static void cmd_calc(char *p)
   }
   ovh = timed(2);
 #ifndef SMALL
+  ovb = timed(3);                       /* the bf16 pass moves 2-byte values: its own overhead (the float
+                                           pass's is larger and hid the FPU's add, 2026-10-18) */
   tf = timed(0);
   f = fstk[0];
 #endif
@@ -1035,9 +1096,13 @@ static void cmd_calc(char *p)
     putnl();
     return;
   }
+#ifdef SMALL
   tb = tb > ovh ? tb - ovh : 0;
-#ifndef SMALL
+#else
+  tb = tb > ovb ? tb - ovb : 0;
   tf = tf > ovh ? tf - ovh : 0;
+#endif
+#ifndef SMALL
   bf = bf16_to_float(bstk[0]);
   puts("float32 ");
   put_float(f, 14);
