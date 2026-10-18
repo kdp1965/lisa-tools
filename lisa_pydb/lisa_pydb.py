@@ -366,12 +366,12 @@ class LisaPyDb:
       self.writeReg(6, v & 0xff)
 
    def readBanks(self):
-      banks = {k: self.readByte(0x8000 | r) & 15 for k, r in self.BANK_REGS.items()}
+      banks = {k: self.readByte(0x8000 | r) & (63 if k == 'code' else 15) for k, r in self.BANK_REGS.items()}
       self.writeReg(7, 0)
       return banks
 
    def setBank(self, which, n):
-      self.writeByte(0x8000 | self.BANK_REGS[which], n & 15)
+      self.writeByte(0x8000 | self.BANK_REGS[which], n & (63 if which == 'code' else 15))
       self.writeReg(7, 0)
 
    # bytes of data RAM through the cache, an address at or above 0x4000 in

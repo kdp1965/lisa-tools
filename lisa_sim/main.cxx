@@ -29,7 +29,7 @@ static void usage(const char* prog) {
     printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
     printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals),\n");
     printf("                   --fixed-irq, and the bank registers [p:0x15..0x17] (code / data /\n");
-    printf("                   stack bank of the upper 16K: 512 KB of code, 256 KB of data),\n");
+    printf("                   stack bank of the upper 16K: 2 MB of code, 256 KB of data),\n");
     printf("                   the 8-byte UART receive FIFOs with the overrun flag (status\n");
     printf("                   bit 2; host bytes arrive one per 1085 clocks).\n");
     printf("                   Default: the TT07 silicon\n");

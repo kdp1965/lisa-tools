@@ -11,3 +11,4 @@ unsigned char b2_apply_common(fn_t f, unsigned char x) __banked;
 unsigned char b3_byte(unsigned char x) __banked;
 unsigned char b3_depth(unsigned char n) __banked;
 unsigned int  b3_sum3(unsigned char a, unsigned int b, unsigned char c) __banked;
+unsigned char b40_byte(unsigned char x) __banked;

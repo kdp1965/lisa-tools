@@ -107,7 +107,7 @@ public:
 
     // the code banks: a window address (a PC, RA, a jal target) as a
     // physical word under code bank `bank`, and back
-    static CodeAddr phys(uint16_t pc, unsigned bank) { pc &= 0x7fff; return pc < 0x4000 ? pc : ((CodeAddr)(bank & 15) << 14) | (pc & 0x3fff); }
+    static CodeAddr phys(uint16_t pc, unsigned bank) { pc &= 0x7fff; return pc < 0x4000 ? pc : ((CodeAddr)(bank & 63) << 14) | (pc & 0x3fff); }
     static uint16_t window(CodeAddr a) { return a < 0x4000 ? (uint16_t)a : (uint16_t)(0x4000 | (a & 0x3fff)); }
     static unsigned bank_of(CodeAddr a, unsigned dflt) { return a < 0x4000 ? dflt : (unsigned)(a >> 14); }
     // where a transfer to window address t made from physical `from` lands: the same bank

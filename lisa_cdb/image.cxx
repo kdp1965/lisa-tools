@@ -86,7 +86,7 @@ bool load_hex_image(const std::string& path, std::vector<uint16_t>& words, std::
         if (err) *err = path + ": no program in it";
         return false;
     }
-    if (words.size() > (1u << 18)) words.resize(1u << 18);    // 16 code banks of 16K words
+    if (words.size() > (1u << 20)) words.resize(1u << 20);    // 64 code banks of 16K words
     return true;
 }
 

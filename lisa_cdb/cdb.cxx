@@ -861,7 +861,7 @@ std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint16_t sp, uint16_t ra, 
             // bank byte it pushed
             uint16_t hi = (uint16_t)((fr.entry_sp + sp_top_) & 0x7fff);
             ret = (uint16_t)((rd(hi) & 0x7f) << 8 | rd((uint16_t)((hi + 1) & 0x7fff)));
-            bank = rd((uint16_t)((hi + 2) & 0x7fff)) & 15;
+            bank = rd((uint16_t)((hi + 2) & 0x7fff)) & 63;
             fr.ret_pc = phys(ret, bank);
             fr.via_bcall = true;
             int n = args - return_slot(*f);
@@ -987,7 +987,7 @@ Cdb::Exits Cdb::line_exits(CodeAddr pc, bool into, CodeAddr ret_pc, const ReadCo
                     int bank = -1;
                     for (CodeAddr b = a - 2; b + 8 > a && b > 0; b--) {
                         uint16_t w = rdcode(b - 1);
-                        if ((w >> 10) == 0x20) { bank = w & 15; break; }   // ldi #imm8
+                        if ((w >> 10) == 0x20) { bank = w & 63; break; }   // ldi #imm8
                     }
                     if (bank >= 0) call(phys(target, (unsigned)bank), seq);
                     else succ(seq);

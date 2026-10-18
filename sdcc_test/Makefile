@@ -64,10 +64,11 @@ test_cachermw8$(SFX).ihx: test_cachermw8.c $(DEPS)
 
 # the code banks: bank n is the area BANKn at byte n * 0x8000 of the flash
 # (sdcc compiles one source per run: the bank files first, to .rel)
-test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank.h $(DEPS)
+test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank40.c test_bank.h $(DEPS)
 	$(SDCC) $(CFLAGS) -c -o test_bank2$(SFX).rel test_bank2.c
 	$(SDCC) $(CFLAGS) -c -o test_bank3$(SFX).rel test_bank3.c
-	$(SDCC) $(CFLAGS) -o $@ test_bank.c test_bank2$(SFX).rel test_bank3$(SFX).rel -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000
+	$(SDCC) $(CFLAGS) -c -o test_bank40$(SFX).rel test_bank40.c
+	$(SDCC) $(CFLAGS) -o $@ test_bank.c test_bank2$(SFX).rel test_bank3$(SFX).rel test_bank40$(SFX).rel -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000 -Wl-bBANK40=0x140000
 
 # the data banks: an __addressmod space's area DBANKn is linked in the window
 test_dbank$(SFX).ihx: test_dbank.c $(DEPS)

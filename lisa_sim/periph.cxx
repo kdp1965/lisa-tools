@@ -118,7 +118,7 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
     case PeriphReg::PORT_E_OUT:      port_e_out_ = val; break;
     case PeriphReg::PORT_A_INT_CFG0: port_a_int_cfg0_ = val; break;
     case PeriphReg::PORT_A_INT_CFG1: port_a_int_cfg1_ = val; break;
-    case PeriphReg::BANK_CODE:       if (rev2_) code_bank_  = val & 0x0F; break;
+    case PeriphReg::BANK_CODE:       if (rev2_) code_bank_  = val & 0x3F; break;     // 6 bits: 64 code banks
     case PeriphReg::BANK_DATA:       if (rev2_) data_bank_  = val & 0x0F; break;
     case PeriphReg::BANK_STACK:      if (rev2_) stack_bank_ = val & 0x0F; break;
 

@@ -92,7 +92,7 @@ unsigned CLisa::Bank(int which)
     if (ReadReg(6, v) == -1)
         v = 1;
     WriteReg(7, 0);
-    return v & 15;
+    return v & (which == 0 ? 63 : 15);       // the code bank is 6 bits, data / stack 4
 }
 
 void CLisa::SetBank(int which, unsigned n)
@@ -100,7 +100,7 @@ void CLisa::SetBank(int which, unsigned n)
     if (!m_Rev2)
         return;
     WriteReg(7, 0x8015 + which);
-    WriteReg(6, n & 15);
+    WriteReg(6, n & (which == 0 ? 63 : 15));
     WriteReg(7, 0);
 }
 

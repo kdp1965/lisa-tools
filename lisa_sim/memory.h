@@ -15,9 +15,10 @@ class LisaMemory {
 public:
     // The physical spaces of the second chip (--rev2, RESPIN 22): the upper
     // 16K of the 15-bit code and data spaces is a window on one of 16 banks,
-    // so 18-bit physical addresses (LisaCore::code_pa / data_pa); TT07's 32K
+    // so 20-bit physical code (64 code banks) and 18-bit data addresses
+    // (16 data banks; LisaCore::code_pa / data_pa); TT07's 32K
     // is bank 0 + bank 1
-    static constexpr int INST_SIZE = 1 << 18;  // instruction words
+    static constexpr int INST_SIZE = 1 << 20;  // instruction words: 64 code banks of 16K
     static constexpr int DATA_SIZE = 1 << 18;  // data bytes
     static constexpr int PC_BITS   = 15;
     static constexpr int D_BITS    = 15;

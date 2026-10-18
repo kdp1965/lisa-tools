@@ -5,7 +5,8 @@
  * recursion across banks.  Three files: this one (common), test_bank2.c
  * (#pragma bank 2) and test_bank3.c (#pragma bank 3), linked with
  * -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000 (byte n * 0x8000 = word 0x4000 of
- * bank n).  --rev2 only: the banks are the second chip's. */
+ * bank n), and test_bank40.c in bank 40 (-Wl-bBANK40=0x140000: the code bank
+ * register is 6 bits).  --rev2 only: the banks are the second chip's. */
 #include "harness.h"
 #include "test_bank.h"
 
@@ -33,5 +34,9 @@ void main(void)
   CHECK(12, b3_depth(6) == 6);                      /* b3 -> b2 -> b3 ... */
   CHECK(13, b3_sum3(1, 300, 2) == 303);
   CHECK(14, CODE_BANK == 1);
+  CHECK(15, b40_byte(1) == 46);                     /* bank 40 -> bank 3 -> bank 2: 1 + 2 + 3 + 40 */
+  f = b40_byte;
+  CHECK(16, f(2) == 47);
+  CHECK(17, CODE_BANK == 1);
   DONE();
 }

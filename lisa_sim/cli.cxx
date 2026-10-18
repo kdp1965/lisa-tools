@@ -410,7 +410,7 @@ uint32_t LisaCli::data_phys(uint32_t a) {
 }
 
 uint32_t LisaCli::code_phys(uint32_t a) {
-    return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & 0x3FFFF);
+    return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & 0xFFFFF);
 }
 
 // a physical code address as text: the window address, with its bank in
@@ -531,7 +531,7 @@ void LisaCli::cmd_dis(const std::vector<std::string>& args) {
     uint32_t addr = st.pc;
     int count = 10;
 
-    if (args.size() > 1) addr = parse_addr(args[1]) & 0x3FFFF;
+    if (args.size() > 1) addr = parse_addr(args[1]) & 0xFFFFF;
     if (args.size() > 2) count = (int)parse_number(args[2]);
     if (count <= 0) count = 10;
 
