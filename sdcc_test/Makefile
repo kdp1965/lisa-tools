@@ -32,9 +32,13 @@ OUTPUT    = hello test_printf test_owl
 # The data cache on an RP2040 SPI RAM (hw_test.mjs spiram=): built, run on the
 # chip only; test_cacherm's expectations are the TT07 silicon's swap n(sp)
 CACHE     = test_cacherm test_cachermw test_cachepush test_cachewb test_cacheseq test_cacheloop test_cacheperiph
+# The second chip's cache (8 lines of 16 bytes): the RMW-on-a-miss test with
+# its evictions 0x80 apart; REV2=1 only, checked on lisa_sim (no cache there)
+# and meant for the ttsky26d testbench and the FPGA with the cache on
+REV2CACHE = test_cachermw8
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
-TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),,$(PROBES) $(CACHE))
+TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
 
 all: $(TESTS:%=%$(SFX).ihx)
 
@@ -48,6 +52,10 @@ DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/buil
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
 test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+
+# its sp cases put a byte 0x80 above the stack, which must stay below 0x8000
+test_cachermw8$(SFX).ihx: test_cachermw8.c $(DEPS)
+	$(SDCC) $(CFLAGS) --stack-loc 0x3fff -o $@ $<
 
 # the C type float on the bfloat16 unit
 test_bf16f$(SFX).ihx: test_bf16f.c $(DEPS)
@@ -65,7 +73,7 @@ export SIMFLAGS_test_irq
 
 check: all
 	@pass=0; fail=0; \
-	for t in $(SELFCHECK); do \
+	for t in $(SELFCHECK) $(if $(REV2),$(REV2CACHE)); do \
 	  eval f=\$$SIMFLAGS_$$t; \
 	  out=$$(SIM=$(SIM) SIMFLAGS="$$f $(REV2SIM)" ./run_sim.sh $${t}$(SFX).ihx $(CYCLES)); \
 	  n=$$(printf '%s\n' "$$out" | grep -c '^ok'); \
