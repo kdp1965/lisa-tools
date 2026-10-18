@@ -41,6 +41,8 @@ REV2CACHE = test_cachermw8
 REV2CACHE += test_bank
 # ... and its data banks: two __addressmod spaces in data banks 2 and 3
 REV2CACHE += test_dbank
+# the huge model: every function banked, the banks by --codeseg; REV2=1 only
+REV2CACHE += test_huge
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -73,6 +75,13 @@ test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank40.c test_ba
 # the data banks: an __addressmod space's area DBANKn is linked in the window
 test_dbank$(SFX).ihx: test_dbank.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $< -Wl-bDBANK2=0x4000 -Wl-bDBANK3=0x4000
+
+# the huge model (--model-huge): no __banked, no #pragma bank; a source goes
+# to a code bank with --codeseg BANKn
+test_huge$(SFX).ihx: test_huge.c test_huge5.c test_huge6.c test_huge.h $(DEPS)
+	$(SDCC) $(CFLAGS) --model-huge --codeseg BANK5 -c -o test_huge5$(SFX).rel test_huge5.c
+	$(SDCC) $(CFLAGS) --model-huge --codeseg BANK6 -c -o test_huge6$(SFX).rel test_huge6.c
+	$(SDCC) $(CFLAGS) --model-huge -o $@ test_huge.c test_huge5$(SFX).rel test_huge6$(SFX).rel -Wl-bBANK5=0x28000 -Wl-bBANK6=0x30000
 
 # the C type float on the bfloat16 unit
 test_bf16f$(SFX).ihx: test_bf16f.c $(DEPS)
