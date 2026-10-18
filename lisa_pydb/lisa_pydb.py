@@ -143,15 +143,20 @@ class LisaPyDb:
          self.opcodes = [line.lower() for line in lines]
          return
       # Intel HEX (sdcc -mlisa): byte addresses, two bytes per word, low
-      # byte first (as lisa_sim's loader); gaps are zero
+      # byte first (as lisa_sim's loader); gaps are zero.  Type 02 / 04
+      # records carry the address above 64 KB (code banks 2 and up on the
+      # second chip, RESPIN 22: bank n at byte n * 0x8000)
       data = {}
+      upper = 0
       for line in lines:
          n, addr, rtype = int(line[1:3], 16), int(line[3:7], 16), int(line[7:9], 16)
          if rtype == 1:
             break
+         if rtype in (2, 4):
+            upper = int(line[9:13], 16) << (16 if rtype == 4 else 4)
          if rtype == 0:
             for i in range(n):
-               data[addr + i] = int(line[9 + 2 * i:11 + 2 * i], 16)
+               data[upper + addr + i] = int(line[9 + 2 * i:11 + 2 * i], 16)
       words = (max(data) + 2) // 2 if data else 0
       self.opcodes = [f'{data.get(2 * w + 1, 0):02x}{data.get(2 * w, 0):02x}' for w in range(words)]
 

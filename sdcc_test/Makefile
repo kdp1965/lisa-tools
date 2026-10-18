@@ -36,6 +36,9 @@ CACHE     = test_cacherm test_cachermw test_cachepush test_cachewb test_cacheseq
 # its evictions 0x80 apart; REV2=1 only, checked on lisa_sim (no cache there)
 # and meant for the ttsky26d testbench and the FPGA with the cache on
 REV2CACHE = test_cachermw8
+# The second chip's code banks (RESPIN 22): __banked functions in banks 2 and
+# 3 through ___sdcc_bcall; REV2=1 only (three source files, see test_bank.c)
+REV2CACHE += test_bank
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -56,6 +59,13 @@ test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
 # its sp cases put a byte 0x80 above the stack, which must stay below 0x8000
 test_cachermw8$(SFX).ihx: test_cachermw8.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x3fff -o $@ $<
+
+# the code banks: bank n is the area BANKn at byte n * 0x8000 of the flash
+# (sdcc compiles one source per run: the bank files first, to .rel)
+test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank.h $(DEPS)
+	$(SDCC) $(CFLAGS) -c -o test_bank2$(SFX).rel test_bank2.c
+	$(SDCC) $(CFLAGS) -c -o test_bank3$(SFX).rel test_bank3.c
+	$(SDCC) $(CFLAGS) -o $@ test_bank.c test_bank2$(SFX).rel test_bank3$(SFX).rel -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000
 
 # the C type float on the bfloat16 unit
 test_bf16f$(SFX).ihx: test_bf16f.c $(DEPS)
