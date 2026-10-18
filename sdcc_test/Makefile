@@ -25,6 +25,9 @@ REV2SIM  = --rev2
 endif
 
 SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
+# long long arithmetic through the library: built, not checked - its signed
+# modulo (_modslonglong, check 8) is wrong on lisa_sim, to be fixed
+KNOWN     = test_ll
 # Probes of the TT07 interrupt hazards (built, not checked: they fail on the
 # chip and on the simulator's TT07 model, pass with --fixed-irq)
 PROBES    = test_aluprobe test_sltprobe test_irqhaz
@@ -45,7 +48,7 @@ REV2CACHE += test_dbank
 REV2CACHE += test_huge
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
-TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
+TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
 
 all: $(TESTS:%=%$(SFX).ihx)
 
