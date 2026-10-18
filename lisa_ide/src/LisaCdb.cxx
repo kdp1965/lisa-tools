@@ -30,14 +30,42 @@ The chip
 ==============================================================================
 */
 
-// n bytes of data RAM from addr, through IX: with the core halted a
-// debugger data read returns the byte at IX (see lisa-test/web); IX is put
-// back and the debugger's data address left at 0 afterwards.
-int CLisa::ReadRam(uint16_t addr, uint8_t *buf, int n)
+// n bytes of data RAM from addr.  TT07: through IX - with the core halted
+// a debugger data read returns the byte at IX (see lisa-test/web); IX is
+// put back.  The second chip reads the debugger's own data address
+// (register 7, incremented after each byte: RESPIN 11 fixed the IX
+// detour), and an address at or above 0x4000 is in the data bank; bank >= 0
+// switches that bank in for the read and back after (RESPIN 22).  The
+// debugger's data address is left at 0 afterwards.
+int CLisa::ReadRam(uint16_t addr, uint8_t *buf, int n, int bank)
 {
     uint32_t    ix, v;
     int         got = 0;
 
+    if (m_Rev2)
+    {
+        int old = -1;
+        if (bank >= 0 && addr + n > 0x4000)
+        {
+            unsigned cur = Bank(1);
+            if (cur != (unsigned) bank)
+            {
+                old = (int) cur;
+                SetBank(1, (unsigned) bank);
+            }
+        }
+        WriteReg(7, addr & 0x7fff);
+        for (int i = 0; i < n; i++)
+        {
+            if (ReadReg(6, v) == -1)
+                break;
+            buf[got++] = v & 0xff;
+        }
+        if (old >= 0)
+            SetBank(1, (unsigned) old);
+        WriteReg(7, 0);
+        return got;
+    }
     if (ReadReg(REG_IX, ix) == -1)
         return -1;
     for (int i = 0; i < n; i++)
@@ -52,6 +80,52 @@ int CLisa::ReadRam(uint16_t addr, uint8_t *buf, int n)
     return got;
 }
 
+// The bank registers [p:0x15..0x17] through the debugger's data port: bit
+// 15 of its address selects the peripheral space (the core halted)
+unsigned CLisa::Bank(int which)
+{
+    uint32_t    v = 1;
+
+    if (!m_Rev2)
+        return 1;
+    WriteReg(7, 0x8015 + which);
+    if (ReadReg(6, v) == -1)
+        v = 1;
+    WriteReg(7, 0);
+    return v & 15;
+}
+
+void CLisa::SetBank(int which, unsigned n)
+{
+    if (!m_Rev2)
+        return;
+    WriteReg(7, 0x8015 + which);
+    WriteReg(6, n & 15);
+    WriteReg(7, 0);
+}
+
+// The PC register is the window address; the code bank says which bank a
+// PC at or above 0x4000 runs in (lisa_cdb: physical code addresses)
+lisa::CodeAddr CLisa::PhysPC(uint32_t pc)
+{
+    pc &= 0x7fff;
+    if (!m_Rev2 || pc < 0x4000)
+        return pc;
+    m_LastCodeBank = Bank(0);
+    return lisa::Cdb::phys((uint16_t) pc, m_LastCodeBank);
+}
+
+std::string CLisa::CAddr(lisa::CodeAddr a)
+{
+    char b[24];
+
+    if (a < 0x8000)
+        snprintf(b, sizeof b, "0x%04x", (unsigned) a);
+    else
+        snprintf(b, sizeof b, "%X:0x%04x", (unsigned) (a >> 14), (unsigned) lisa::Cdb::window(a));
+    return b;
+}
+
 bool CLisa::ReadCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uint32_t& acc)
 {
     return ReadReg(REG_PC, pc) != -1 && ReadReg(REG_SP, sp) != -1 && ReadReg(REG_RA, ra) != -1 &&
@@ -60,11 +134,10 @@ bool CLisa::ReadCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uin
 
 // an instruction word: from the image `debug` loaded, else from the flash
 // through the debugger's QSPI port
-uint16_t CLisa::CodeWord(uint16_t pc)
+uint16_t CLisa::CodeWord(lisa::CodeAddr pc)
 {
     uint32_t    v = 0;
 
-    pc &= 0x7fff;
     if (pc < m_Program.size())
         return m_Program[pc];
     SetDebugAddress(m_Setup.lisa1_base + pc * 2);
@@ -74,28 +147,31 @@ uint16_t CLisa::CodeWord(uint16_t pc)
 
 // Where the instruction op at pc can continue (TT07 decode, lisa_core.v):
 // the taken and the fall-through address both, a predicated instruction
-// may be skipped altogether.
-std::vector<uint16_t> CLisa::NextPCs(uint16_t op, uint16_t pc, uint16_t ra, uint16_t ix)
+// may be skipped altogether.  Physical addresses: a window target is in
+// pc's bank, or under code_bank from the common area (where call ix and
+// ret land after ___sdcc_bcall has switched the bank).
+std::vector<lisa::CodeAddr> CLisa::NextPCs(uint16_t op, lisa::CodeAddr pc, uint16_t ra, uint16_t ix, unsigned code_bank)
 {
-    uint16_t    seq = (pc + 1) & 0x7fff;
+    auto        at = [&](uint32_t w) { return lisa::Cdb::phys((uint16_t) (w & 0x7fff), pc >= 0x4000 ? (unsigned) (pc >> 14) : code_bank); };
+    lisa::CodeAddr seq = pc + 1;
     int         rel = op & 0x7ff;
 
     if (rel & 0x400)
         rel -= 0x800;
-    uint16_t    relpc = (pc + rel) & 0x7fff;
+    lisa::CodeAddr relpc = at(lisa::Cdb::window(pc) + rel);
     if (!(op & 0x8000))
-        return { (uint16_t) (op & 0x7fff), seq };                               // jal
+        return { at(op), seq };                                                 // jal
     uint16_t t5 = op >> 11, t6 = op >> 10, t9 = op >> 7, t10 = op >> 6, t11 = op >> 5;
     if (t5 == 0x16 || t5 == 0x15 || t5 == 0x17)
         return { relpc, seq };                                                  // br / bnz / bz
     if (t6 == 0x23 || t9 == 0x114 || t10 == 0x22c || t10 == 0x22e)
-        return { ra, seq };                                                     // ret #k / ret / rc / rz
+        return { at(ra), seq };                                                 // ret #k / ret / rc / rz
     if (t10 == 0x22d)
         return { seq };                                                         // rets: IA is not readable
     if (t11 == 0x454 || t11 == 0x455)
-        return { ix, seq };                                                     // call ix / jmp ix
+        return { at(ix), seq };                                                 // call ix / jmp ix
     if ((op >> 4) == 0xa18)
-        return { (uint16_t) ((pc + 2) & 0x7fff) };                              // ldx: the next word is its operand
+        return { pc + 2 };                                                      // ldx: the next word is its operand
     return { seq };
 }
 
@@ -215,18 +291,24 @@ bool CLisa::RunGranted(int timeoutMs)
 bool CLisa::SafeHalt(void)
 {
     uint32_t    pc, st;
-    auto        rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
-    std::vector<uint16_t> samples, cand;
+    auto        rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
+    std::vector<lisa::CodeAddr> samples, cand;
 
     if (ReadReg(REG_STATUS, st) != -1 && (st & 1))
         return true;
+    // the PC can be sampled while the core runs, the code bank cannot (the
+    // debugger's data port wants a halted core): the bank of the last halt
     for (int i = 0; i < 8; i++)
-        if (ReadReg(REG_PC, pc) != -1 && std::find(samples.begin(), samples.end(), (uint16_t) pc) == samples.end())
-            samples.push_back(pc);
-    auto add = [&](uint16_t x) {
+        if (ReadReg(REG_PC, pc) != -1)
+        {
+            lisa::CodeAddr p = (pc & 0x7fff) < 0x4000 ? (pc & 0x7fff) : lisa::Cdb::phys((uint16_t) pc, m_LastCodeBank);
+            if (std::find(samples.begin(), samples.end(), p) == samples.end())
+                samples.push_back(p);
+        }
+    auto add = [&](lisa::CodeAddr x) {
         int     delta = 0;
         bool    ok = true;
-        uint16_t s = lisa::Cdb::safe_stop(x, rc, &delta, &ok);
+        lisa::CodeAddr s = lisa::Cdb::safe_stop(x, rc, &delta, &ok);
         if (!ok || cand.size() >= 4 || std::find(cand.begin(), cand.end(), s) != cand.end())
             return;
         if (s != x)
@@ -234,15 +316,15 @@ bool CLisa::SafeHalt(void)
         cand.push_back(s);
     };
     if (m_Cdb.loaded())
-        for (uint16_t p : samples)
+        for (lisa::CodeAddr p : samples)
             if (const lisa::CdbLine *l = m_Cdb.line_at(p))
                 add(l->addr);
-    for (uint16_t p : samples)
+    for (lisa::CodeAddr p : samples)
         add(p);
     if (!cand.empty())
     {
         for (int i = 0; i < 4; i++)
-            WriteReg(8 + i, i < (int) cand.size() ? (0x8000 | cand[i]) : 0);
+            WriteReg(8 + i, i < (int) cand.size() ? (0x8000 | lisa::Cdb::window(cand[i])) : 0);
         for (int i = 0; i < 20; i++)                            // up to a second for the loop to come round
         {
             if (ReadReg(REG_STATUS, st) != -1 && (st & 1))
@@ -264,15 +346,15 @@ bool CLisa::SafeHalt(void)
 
 // x if it is safe to halt at, else the first address after it that is
 // (Cdb::safe_stop), remembered so the stop can be reported as x
-uint16_t CLisa::SafeStop(uint16_t x)
+lisa::CodeAddr CLisa::SafeStop(lisa::CodeAddr x)
 {
     int     delta = 0;
     bool    ok = true;
-    auto    rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
-    uint16_t s = lisa::Cdb::safe_stop(x, rc, &delta, &ok);
+    auto    rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
+    lisa::CodeAddr s = lisa::Cdb::safe_stop(x, rc, &delta, &ok);
 
     if (!ok)
-        Printf("warning: a stop at 0x%04x directly follows a store and cannot be moved past it (TT07: the store would be lost)", x);
+        Printf("warning: a stop at %s directly follows a store and cannot be moved past it (TT07: the store would be lost)", CAddr(x).c_str());
     if (s != x)
         m_Shift[s] = std::make_pair(x, delta);
     return s;
@@ -286,7 +368,8 @@ bool CLisa::LogicalCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, 
         *pShifted = false;
     if (!ReadCore(pc, sp, ra, ix, acc))
         return false;
-    auto it = m_Shift.find((uint16_t) pc);
+    pc = PhysPC(pc);
+    auto it = m_Shift.find(pc);
     if (it != m_Shift.end())
     {
         pc = it->second.first;
@@ -302,25 +385,27 @@ bool CLisa::LogicalCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, 
 // act).  A store is run together with what follows it, up to an
 // instruction that is safe to halt at.  Returns the new PC, -1 if it could
 // not.
-int CLisa::StepInsn(void)
+long CLisa::StepInsn(void)
 {
     uint32_t    pc, ra, ix, saved[4];
 
     if (ReadReg(REG_PC, pc) == -1 || ReadReg(REG_RA, ra) == -1 || ReadReg(REG_IX, ix) == -1)
         return -1;
+    unsigned cb = Bank(0);
+    pc = lisa::Cdb::phys((uint16_t) pc, cb);
     uint16_t op = CodeWord(pc);
-    std::vector<uint16_t> t = NextPCs(op, pc, ra & 0x7fff, ix & 0x7fff);
+    std::vector<lisa::CodeAddr> t = NextPCs(op, pc, ra & 0x7fff, ix & 0x7fff, cb);
     // a store runs on with what follows it; the real PC is reported (not
     // remembered in m_Shift: that is for stops meant at a line)
     bool past = false;
     if (lisa::Cdb::is_store(op))
     {
-        auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
-        for (uint16_t& a : t)
+        auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
+        for (lisa::CodeAddr& a : t)
         {
             int  delta;
             bool ok;
-            uint16_t s = lisa::Cdb::safe_stop(a, rc, &delta, &ok);
+            lisa::CodeAddr s = lisa::Cdb::safe_stop(a, rc, &delta, &ok);
             if (ok && s != a)
             {
                 a = s;
@@ -328,18 +413,18 @@ int CLisa::StepInsn(void)
             }
         }
     }
-    t.erase(std::remove(t.begin(), t.end(), (uint16_t) pc), t.end());
+    t.erase(std::remove(t.begin(), t.end(), (lisa::CodeAddr) pc), t.end());
     std::sort(t.begin(), t.end());
     t.erase(std::unique(t.begin(), t.end()), t.end());
     if (t.empty())
     {
-        Printf("cannot step at 0x%04x: the instruction only leads back to itself", pc);
+        Printf("cannot step at %s: the instruction only leads back to itself", CAddr(pc).c_str());
         return -1;
     }
     for (int i = 0; i < 4; i++)
         ReadReg(8 + i, saved[i]);
     for (int i = 0; i < 4; i++)
-        WriteReg(8 + i, i < (int) t.size() ? (0x8000 | t[i]) : 0);
+        WriteReg(8 + i, i < (int) t.size() ? (0x8000 | lisa::Cdb::window(t[i])) : 0);
     WriteReg(REG_STATUS, 2);
     bool halted = WaitHalt(2000);
     if (!halted)
@@ -353,10 +438,11 @@ int CLisa::StepInsn(void)
     }
     if (ReadReg(REG_PC, pc) == -1)
         return -1;
-    m_Shift.erase((uint16_t) pc);           // here by a step: the PC is what it says
+    pc = PhysPC(pc);
+    m_Shift.erase(pc);                      // here by a step: the PC is what it says
     if (past)
-        Printf("(a store: ran on to 0x%04x - a halt right after a store loses it on TT07)", pc);
-    return (int) pc;
+        Printf("(a store: ran on to %s - a halt right after a store loses it on TT07)", CAddr(pc).c_str());
+    return (long) pc;
 }
 
 // Run until one of the stops (at most four) is reached, the user's
@@ -364,53 +450,98 @@ int CLisa::StepInsn(void)
 // afterwards.  A stop at the current PC needs one instruction first - a
 // breakpoint there halts the core before it moves.  Returns the PC at the
 // halt, -1 on a timeout (the core is halted then too).
-int CLisa::RunToStops(const std::vector<uint16_t>& wanted, int timeoutMs)
+long CLisa::RunToStops(const std::vector<lisa::CodeAddr>& wanted, int timeoutMs)
 {
     uint32_t    pc, saved[4];
 
     // never a breakpoint right after a store (the TT07 hazard): the stops
     // that would be are moved on, and reported as the stop meant
-    std::vector<uint16_t> stops;
-    for (uint16_t s : wanted)
+    std::vector<lisa::CodeAddr> stops;
+    for (lisa::CodeAddr s : wanted)
         stops.push_back(SafeStop(s));
-    auto logical = [this](uint32_t p) -> int {
-        auto it = m_Shift.find((uint16_t) p);
-        return it != m_Shift.end() ? it->second.first : (int) p;
+    auto logical = [this](lisa::CodeAddr p) -> long {
+        auto it = m_Shift.find(p);
+        return it != m_Shift.end() ? (long) it->second.first : (long) p;
+    };
+    // the user's breakpoints, physical (their bank as set)
+    auto user_bp = [this](int i, uint32_t reg) {
+        return lisa::Cdb::phys((uint16_t) (reg & 0x7fff), m_BreakBank[i]);
     };
 
     if (ReadReg(REG_PC, pc) == -1)
         return -1;
+    lisa::CodeAddr here = PhysPC(pc);
     for (int i = 0; i < 4; i++)
         ReadReg(8 + i, saved[i]);
     bool at_user_bp = false;
     for (int i = 0; i < 4; i++)
-        if ((saved[i] & 0x8000) && (saved[i] & 0x7fff) == pc)
+        if ((saved[i] & 0x8000) && (saved[i] & 0x7fff) == lisa::Cdb::window(here))
             at_user_bp = true;
-    if (at_user_bp || std::find(stops.begin(), stops.end(), (uint16_t) pc) != stops.end())
+    if (at_user_bp || std::find(stops.begin(), stops.end(), here) != stops.end())
     {
-        if (StepInsn() < 0 || ReadReg(REG_PC, pc) == -1)
+        long np = StepInsn();
+        if (np < 0)
             return -1;
-        if (std::find(stops.begin(), stops.end(), (uint16_t) pc) != stops.end())
-            return logical(pc);
+        here = (lisa::CodeAddr) np;
+        if (std::find(stops.begin(), stops.end(), here) != stops.end())
+            return logical(here);
     }
-    std::vector<uint16_t> regs = stops;
+    // the hardware compares the window address: a stop in a code bank is a
+    // window address, and a halt there while another bank is switched in
+    // is not ours - the core is resumed (StrayBankHalt)
+    std::vector<uint16_t> regs;
+    for (lisa::CodeAddr s : stops)
+        if (std::find(regs.begin(), regs.end(), lisa::Cdb::window(s)) == regs.end())
+            regs.push_back(lisa::Cdb::window(s));
     for (int i = 0; i < 4 && regs.size() < 4; i++)
-        if ((saved[i] & 0x8000) && (saved[i] & 0x7fff) != pc &&
+        if ((saved[i] & 0x8000) && (saved[i] & 0x7fff) != lisa::Cdb::window(here) &&
             std::find(regs.begin(), regs.end(), (uint16_t) (saved[i] & 0x7fff)) == regs.end())
             regs.push_back(saved[i] & 0x7fff);
     for (int i = 0; i < 4; i++)
         WriteReg(8 + i, i < (int) regs.size() ? (0x8000 | regs[i]) : 0);
-    WriteReg(REG_STATUS, 2);
+    m_Wanted = stops;
+    for (int i = 0; i < 4; i++)
+        if (saved[i] & 0x8000)
+            m_Wanted.push_back(user_bp(i, saved[i]));
     m_Running = 1;
-    bool halted = RunGranted(timeoutMs);
+    bool halted = false;
+    for (int stray = 0; ; stray++)
+    {
+        WriteReg(REG_STATUS, 2);
+        halted = RunGranted(timeoutMs);
+        if (!halted || stray >= 10000 || !StrayBankHalt())
+            break;
+    }
     if (!halted)
         WriteReg(REG_STATUS, 1);
     m_Running = 0;
+    m_Wanted.clear();
     for (int i = 0; i < 4; i++)
         WriteReg(8 + i, saved[i]);
     if (!halted)
         return -1;
-    return ReadReg(REG_PC, pc) == -1 ? -1 : logical(pc);
+    return ReadReg(REG_PC, pc) == -1 ? -1 : logical(PhysPC(pc));
+}
+
+// The core halted at the window address of a stop or breakpoint, but in
+// another code bank than the one it is meant for: not a stop (RunToStops
+// resumes).  A halt anywhere else - a brk, Ctrl-C - is a stop.
+bool CLisa::StrayBankHalt(void)
+{
+    uint32_t    pc;
+
+    if (!m_Rev2 || ReadReg(REG_PC, pc) == -1 || (pc & 0x7fff) < 0x4000)
+        return false;
+    lisa::CodeAddr p = PhysPC(pc);
+    bool at_window = false;
+    for (lisa::CodeAddr w : m_Wanted)
+    {
+        if (w == p)
+            return false;
+        if (lisa::Cdb::window(w) == lisa::Cdb::window(p))
+            at_window = true;
+    }
+    return at_window;
 }
 
 
@@ -433,7 +564,7 @@ lisa_src_t * CLisa::SourceForFile(const std::string& file)
 // the line of this source that pc is on, 0 if none
 int CLisa::PCLineOf(lisa_src_t *pSrc, uint32_t pc)
 {
-    const lisa::CdbLine *l = m_Cdb.loaded() ? m_Cdb.line_at(pc) : NULL;
+    const lisa::CdbLine *l = m_Cdb.loaded() ? m_Cdb.line_at(PhysPC(pc)) : NULL;
 
     if (l && strcmp(basename_of(l->file.c_str()), basename_of(pSrc->cdb_file)) == 0)
         return l->line;
@@ -448,7 +579,7 @@ bool CLisa::IsBreakLine(lisa_src_t *pSrc, int line)
     {
         if (!(m_Breakpoints[x] & 0x8000))
             continue;
-        const lisa::CdbLine *l = m_Cdb.line_at(m_Breakpoints[x] & 0x7fff);
+        const lisa::CdbLine *l = m_Cdb.line_at(lisa::Cdb::phys(m_Breakpoints[x] & 0x7fff, m_BreakBank[x]));
         if (l && l->line == line && strcmp(basename_of(l->file.c_str()), basename_of(pSrc->cdb_file)) == 0)
             return true;
     }
@@ -456,13 +587,19 @@ bool CLisa::IsBreakLine(lisa_src_t *pSrc, int line)
 }
 
 // file:line, a line of the active tab's file, a function (its first line
-// past the prologue), or *addr / 0xaddr
-bool CLisa::ResolveLocation(const char *spec, uint16_t& addr, std::string& what)
+// past the prologue), or *addr / 0xaddr - a window address in the code bank
+// switched in, *bank:addr in another bank (hex)
+bool CLisa::ResolveLocation(const char *spec, lisa::CodeAddr& addr, std::string& what)
 {
     what.clear();
     if (spec[0] == '*' || (spec[0] == '0' && (spec[1] == 'x' || spec[1] == 'X')))
     {
-        addr = strtoul(spec[0] == '*' ? spec + 1 : spec, NULL, 16) & 0x7fff;
+        const char *a = spec[0] == '*' ? spec + 1 : spec;
+        const char *colon = strchr(a, ':');
+        if (colon)
+            addr = lisa::Cdb::phys((uint16_t) strtoul(colon + 1, NULL, 16), (unsigned) strtoul(a, NULL, 16));
+        else
+            addr = m_Connected ? PhysPC(strtoul(a, NULL, 16)) : (strtoul(a, NULL, 16) & 0x7fff);
         const lisa::CdbLine *l = m_Cdb.loaded() ? m_Cdb.line_at(addr) : NULL;
         if (l)
             what = l->file + ":" + std::to_string(l->line);
@@ -470,7 +607,7 @@ bool CLisa::ResolveLocation(const char *spec, uint16_t& addr, std::string& what)
     }
     if (!m_Cdb.loaded())
     {
-        addr = strtoul(spec, NULL, 0) & 0x7fff;
+        addr = m_Connected ? PhysPC(strtoul(spec, NULL, 0)) : (strtoul(spec, NULL, 0) & 0x7fff);
         return true;
     }
     std::string file;
@@ -496,7 +633,7 @@ bool CLisa::ResolveLocation(const char *spec, uint16_t& addr, std::string& what)
         if (file.empty())
         {
             uint32_t pc;
-            const lisa::CdbLine *here = (m_Connected && ReadReg(REG_PC, pc) != -1) ? m_Cdb.line_at(pc) : NULL;
+            const lisa::CdbLine *here = (m_Connected && ReadReg(REG_PC, pc) != -1) ? m_Cdb.line_at(PhysPC(pc)) : NULL;
             if (here)
                 file = here->file;
             else if (!m_Cdb.files().empty())
@@ -518,7 +655,7 @@ bool CLisa::ResolveLocation(const char *spec, uint16_t& addr, std::string& what)
         what = f->name + "()" + (l ? " at " + l->file + ":" + std::to_string(l->line) : "");
         return true;
     }
-    std::vector<uint16_t> addrs = m_Cdb.addrs_of_line(file, line);
+    std::vector<lisa::CodeAddr> addrs = m_Cdb.addrs_of_line(file, line);
     if (addrs.empty())
     {
         const lisa::CdbLine *nl = m_Cdb.next_line_with_code(file, line);
@@ -550,7 +687,7 @@ void CLisa::ShowLocation(bool activate)
     {
         std::string src = m_Cdb.source(l->file, l->line);
         size_t b = src.find_first_not_of(" \t");
-        Printf("0x%04x  %s:%d in %s():  %s", pc, l->file.c_str(), l->line, f->name.c_str(),
+        Printf("%s  %s:%d in %s():  %s", CAddr(pc).c_str(), l->file.c_str(), l->line, f->name.c_str(),
                b == std::string::npos ? "" : src.c_str() + b);
         lisa_src_t *pSrc = SourceForFile(l->file);
         if (pSrc && pSrc->pTab)
@@ -570,10 +707,51 @@ void CLisa::ShowLocation(bool activate)
         }
     }
     else if (f)
-        Printf("0x%04x in %s() (no line here)", pc, f->name.c_str());
+        Printf("%s in %s() (no line here)", CAddr(pc).c_str(), f->name.c_str());
     else
-        Printf("0x%04x (no source: not in a C function)", pc);
+        Printf("%s (no source: not in a C function)", CAddr(pc).c_str());
     m_pParent->DrawSourceWindow();
+}
+
+// Data bytes for the source-level views, read 16 at a time: SP-relative
+// data (at or above SP: the frames) through the stack bank, the rest
+// through the data bank switched in (the debugger's port reads through the
+// data bank: RESPIN 22).  SP and the banks are read once.
+struct RamReader
+{
+    CLisa      *l;
+    uint16_t    sp;
+    int         sb;             // the stack bank when it differs from the data bank, else -1
+    uint16_t    base = 0;
+    int         len = 0, bank = -2;
+    uint8_t     buf[16];
+    uint8_t operator()(uint16_t a)
+    {
+        int b = (sb >= 0 && a >= sp && a >= 0x4000) ? sb : -1;
+        if (!(len && b == bank && a >= base && a < base + len))
+        {
+            base = a;
+            bank = b;
+            len = l->ReadRam(a, buf, 16, b);
+            if (len <= 0) { len = 0; return 0; }
+        }
+        return buf[a - base];
+    }
+};
+
+RamReader ram_reader(CLisa *l, uint32_t sp, bool rev2)
+{
+    RamReader r;
+    r.l = l;
+    r.sp = (uint16_t) (sp & 0x7fff);
+    r.sb = -1;
+    if (rev2 && r.sp >= 0x3f00)
+    {
+        unsigned sb = l->Bank(2), db = l->Bank(1);
+        if (sb != db)
+            r.sb = (int) sb;
+    }
+    return r;
 }
 
 // the halted frame for print/locals: the function at PC, its entry SP from
@@ -590,9 +768,9 @@ lisa::Cdb::Frame CLisa::FrameHere(const lisa::CdbFunction **ppFn, uint32_t *pPc)
         return fr;
     if (pPc)
         *pPc = pc;
-    auto rd = [this](uint16_t a) -> uint8_t { uint8_t b = 0; ReadRam(a, &b, 1); return b; };
-    auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
-    std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 1);
+    lisa::Cdb::ReadData rd = ram_reader(this, sp, m_Rev2);
+    auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
+    std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 1, Bank(0));
     if (frames.empty())
         return fr;
     fr.function = frames[0].function->name;
@@ -679,7 +857,7 @@ int CLisa::Debug(int argc, char* argv[])
     if (m_Connected)
     {
         const lisa::CdbFunction *f = m_Cdb.function("main");
-        uint16_t at = f && f->has_addr ? f->addr : 0;
+        lisa::CodeAddr at = f && f->has_addr ? f->addr : 0;
         int bad = 0;
         for (int i = 0; i < 4 && at + i < words.size(); i++)
         {
@@ -689,7 +867,7 @@ int CLisa::Debug(int argc, char* argv[])
                 bad++;
         }
         if (bad)
-            Printf("warning: the flash differs from %s at 0x%04x (program it first)", basename_of(path.c_str()), at);
+            Printf("warning: the flash differs from %s at %s (program it first)", basename_of(path.c_str()), CAddr(at).c_str());
         uint32_t st;
         if (ReadReg(REG_STATUS, st) != -1 && !(st & 1))
             Printf("the core is running (halt, or Ctrl-C during run, stops it at a safe place)");
@@ -726,8 +904,7 @@ int CLisa::StepToLine(int mode)
         Printf("The core is running: halt it first");
         return 1;
     }
-    auto rd = [this](uint16_t a) -> uint8_t { uint8_t b = 0; ReadRam(a, &b, 1); return b; };
-    auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
+    auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     bool finishing = mode == 2;
     for (int round = 0; ; round++)
     {
@@ -739,11 +916,12 @@ int CLisa::StepToLine(int mode)
         uint32_t pc, sp, ra, ix, acc;
         if (!LogicalCore(pc, sp, ra, ix, acc))
             return 1;
-        std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 1);
-        uint16_t ret = frames.empty() ? 0 : frames[0].ret_pc;
+        lisa::Cdb::ReadData rd = ram_reader(this, sp, m_Rev2);
+        std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 1, Bank(0));
+        lisa::CodeAddr ret = frames.empty() ? 0 : frames[0].ret_pc;
         uint16_t entry_sp = frames.empty() ? sp : frames[0].entry_sp;
         const lisa::CdbFunction *fn = m_Cdb.function_at(pc);
-        std::vector<uint16_t> stops;
+        std::vector<lisa::CodeAddr> stops;
         bool stepping = false;
         if (finishing)
         {
@@ -766,19 +944,19 @@ int CLisa::StepToLine(int mode)
                 stepping = true;
             }
         }
-        int now;
+        long now;
         if (stepping)
         {
             // instruction by instruction until a line start (or out of the function)
             now = -1;
             for (int i = 0; i < 3000; i++)
             {
-                int npc = StepInsn();
-                if (npc >= 0 && m_Shift.count((uint16_t) npc))
-                    npc = m_Shift[(uint16_t) npc].first;
+                long npc = StepInsn();
+                if (npc >= 0 && m_Shift.count((lisa::CodeAddr) npc))
+                    npc = m_Shift[(lisa::CodeAddr) npc].first;
                 if (npc < 0)
                     return 1;
-                if (m_Cdb.line_starting(npc) || !m_Cdb.function_at(npc) || (mode == 0 && m_Cdb.function_at(npc) != fn && std::find(stops.begin(), stops.end(), (uint16_t) npc) != stops.end()))
+                if (m_Cdb.line_starting(npc) || !m_Cdb.function_at(npc) || (mode == 0 && m_Cdb.function_at(npc) != fn && std::find(stops.begin(), stops.end(), (lisa::CodeAddr) npc) != stops.end()))
                 {
                     now = npc;
                     break;
@@ -806,12 +984,12 @@ int CLisa::StepToLine(int mode)
                 break;
             }
         }
-        bool ours = std::find(stops.begin(), stops.end(), (uint16_t) now) != stops.end();
+        bool ours = std::find(stops.begin(), stops.end(), (lisa::CodeAddr) now) != stops.end();
         if (!ours && !stepping)
             break;                                                      // a breakpoint of the user's
         if (!m_Cdb.function_at(now))
         {
-            Printf("(left the C code at 0x%04x)", now);
+            Printf("(left the C code at %s)", CAddr(now).c_str());
             break;
         }
         uint32_t nsp, npc_, nra_, nix_, nacc_;
@@ -881,20 +1059,11 @@ int CLisa::Print(int argc, char* argv[])
     for (int i = 1; i < argc; i++)
         expr += argv[i];
     // the data, read 16 bytes at a time around what is asked for
-    uint16_t    cbase = 0;
-    int         clen = 0;
-    uint8_t     cbuf[16];
-    auto rd = [&](uint16_t a) -> uint8_t {
-        if (!(clen && a >= cbase && a < cbase + clen))
-        {
-            cbase = a;
-            clen = ReadRam(a, cbuf, 16);
-            if (clen <= 0) { clen = 0; return 0; }
-        }
-        return cbuf[a - cbase];
-    };
+    uint32_t    rsp = 0;
+    ReadReg(REG_SP, rsp);
+    lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
     auto rdp = [](uint16_t) -> uint8_t { return 0; };    // peripheral registers: not readable through the debugger
-    auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
+    auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     const lisa::CdbFunction *fn;
     lisa::Cdb::Frame fr = FrameHere(&fn);
     std::string err;
@@ -915,26 +1084,17 @@ int CLisa::Locals(int argc, char* argv[])
         Printf("No debug info: debug <prog.ihx> first");
         return 1;
     }
-    uint16_t    cbase = 0;
-    int         clen = 0;
-    uint8_t     cbuf[16];
-    auto rd = [&](uint16_t a) -> uint8_t {
-        if (!(clen && a >= cbase && a < cbase + clen))
-        {
-            cbase = a;
-            clen = ReadRam(a, cbuf, 16);
-            if (clen <= 0) { clen = 0; return 0; }
-        }
-        return cbuf[a - cbase];
-    };
+    uint32_t    rsp = 0;
+    ReadReg(REG_SP, rsp);
+    lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
     auto rdp = [](uint16_t) -> uint8_t { return 0; };
-    auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
+    auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     const lisa::CdbFunction *fn;
     uint32_t pc;
     lisa::Cdb::Frame fr = FrameHere(&fn, &pc);
     if (!fn)
     {
-        Printf("0x%04x is not in a C function", pc);
+        Printf("%s is not in a C function", CAddr(pc).c_str());
         return 1;
     }
     Printf("%s(), entry SP=0x%04x%s:", fn->name.c_str(), fr.entry_sp, fr.ra_saved ? ", RA saved" : "");
@@ -971,24 +1131,15 @@ int CLisa::Backtrace(int argc, char* argv[])
     bool     shifted;
     if (!LogicalCore(pc, sp, ra, ix, acc, &shifted))
         return 1;
-    uint16_t    cbase = 0;
-    int         clen = 0;
-    uint8_t     cbuf[16];
-    auto rd = [&](uint16_t a) -> uint8_t {
-        if (!(clen && a >= cbase && a < cbase + clen))
-        {
-            cbase = a;
-            clen = ReadRam(a, cbuf, 16);
-            if (clen <= 0) { clen = 0; return 0; }
-        }
-        return cbuf[a - cbase];
-    };
+    uint32_t    rsp = 0;
+    ReadReg(REG_SP, rsp);
+    lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
     auto rdp = [](uint16_t) -> uint8_t { return 0; };
-    auto rc = [this](uint16_t w) -> uint16_t { return CodeWord(w); };
-    std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc);
+    auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
+    std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 32, Bank(0));
     if (frames.empty())
     {
-        Printf("#0  0x%04x  ?? (not in a C function)", pc);
+        Printf("#0  %s  ?? (not in a C function)", CAddr(pc).c_str());
         return 0;
     }
     for (size_t i = 0; i < frames.size(); i++)
@@ -1012,8 +1163,9 @@ int CLisa::Backtrace(int argc, char* argv[])
             params += s->name + "=" + (m_Cdb.variable(s->name, &cf, v) ? m_Cdb.format_value(v, rd, rdp, rc) : "?");
         }
         const lisa::CdbLine *l = m_Cdb.line_at(i == 0 ? fr.pc : fr.pc - 1);
-        Printf("#%-2zu 0x%04x  %s(%s)%s%s%s", i, fr.pc, fr.function->name.c_str(), params.c_str(),
-               l ? " at " : "", l ? l->file.c_str() : "", l ? (":" + std::to_string(l->line)).c_str() : "");
+        Printf("#%-2zu %s  %s(%s)%s%s%s%s", i, CAddr(fr.pc).c_str(), fr.function->name.c_str(), params.c_str(),
+               l ? " at " : "", l ? l->file.c_str() : "", l ? (":" + std::to_string(l->line)).c_str() : "",
+               fr.via_bcall ? "  (called through ___sdcc_bcall)" : "");
     }
     return 0;
 }

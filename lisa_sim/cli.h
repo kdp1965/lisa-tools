@@ -74,9 +74,12 @@ private:
     // Source-level helpers
     void print_location();                      // the PC line, then file:line and the source
     void report_cdb();                          // what load found
-    bool resolve_location(const std::string& spec, uint16_t& addr, std::string& what);
-    bool frame_ra_saved(const lisa::CdbFunction& f, uint16_t pc);
-    lisa::Cdb::Frame frame_of(size_t depth, uint16_t& pc, const lisa::CdbFunction** fn);
+    bool resolve_location(const std::string& spec, uint32_t& addr, std::string& what);
+    bool frame_ra_saved(const lisa::CdbFunction& f, uint32_t pc);
+    lisa::Cdb::Frame frame_of(size_t depth, uint32_t& pc, const lisa::CdbFunction** fn);
+    std::string caddr(uint32_t a);       // a physical code address as text (bank:addr in a bank)
+    uint32_t parse_code(const std::string& s);
+    uint8_t  rd_data(uint16_t a);         // a data byte, frames through the stack bank
     std::string list_file_;                     // where `list` continues
     int list_line_ = 0;                         // the last line listed, 0: list around the PC
 };

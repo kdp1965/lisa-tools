@@ -117,8 +117,31 @@ debugger round trip costs ~30 ms, so:
   two bytes or a struct.  Exact where `next`/`into`/`finish`/breakpoints
   stop (statement boundaries); after `halt` mid-statement the caller
   frames may be off by the arguments being pushed.
-* `print` reads data through IX (16 bytes per request), code-space
-  constants from the image; peripheral registers are not readable this way.
+* `print` reads data through IX on TT07, through the debug port's data
+  address on the second chip (16 bytes per request), code-space constants
+  from the image; peripheral registers are not read (a read can have side
+  effects: the UART pops its FIFO).
+* **Code and data banks (the second chip, ttsky26d RESPIN 22).** The upper
+  half of the code space is a window on one of 16 code banks; the reader
+  and this debugger work in physical code addresses (`lisa::CodeAddr`:
+  `{bank, PC[13:0]}` at or above 0x4000), the PC through the code bank
+  register read from the debug port (data address 0x8015: bit 15 is the
+  peripheral space; 0x8016 the data bank, 0x8017 the stack bank).  A
+  location in a bank prints as `2:0x4000`; `break *2:4000` sets one.  The
+  four breakpoint registers hold window addresses, so a halt at one in
+  another bank is not a stop: `run`, `next`/`into`/`finish` resume the core
+  (`StrayBankHalt`).  `bt` goes through `___sdcc_bcall` to the caller and
+  its bank (`(called through ___sdcc_bcall)`), `into` follows a `__banked`
+  call into its bank.  Data reads use the debug port's own address
+  (register 7; TT07's reads went through IX), frames above 0x4000 through
+  the stack bank (the debug port reads through the data bank, which is
+  switched to the stack bank for the read and back).  `load` of a banked
+  image erases the 64K blocks it spans and skips the gaps between the
+  banks (runs of 256+ zero words: the image loader's fill), so it programs
+  the code only.  Checked on the Arty build (`fpga/arty_a7` of ttsky26d):
+  breakpoints in banks 2 and 3, `bt`, `print`, `finish`, `into`, a bank-3
+  breakpoint passed over by bank 2's code at the same window address, and
+  `load` of sdcc_test/test_bank on a blank flash.
 * `run` blocks like gdb's `continue`: the program gets the UART (its output
   appears as `[LISA] ...`), the core is checked between, and it ends at a
   breakpoint, a `brk` or Ctrl-C.

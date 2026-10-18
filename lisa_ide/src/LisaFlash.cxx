@@ -87,6 +87,22 @@ bool CLisa::FlashIdle(int timeoutMs)
     }
 }
 
+// A gap of the image: 256 or more 0x0000 words in a row.  The image loader
+// fills what the file does not hold with zeros, and a program has no such
+// run (0x0000 is `jal 0`): with code banks (the second chip, bank n at
+// byte n * 0x8000) the gaps are most of the image, so they are skipped -
+// left erased - by the program and the verify.  The end of the run in *end.
+static bool image_gap(const std::vector<uint16_t>& words, size_t i, size_t *end)
+{
+    size_t j = i;
+    while (j < words.size() && words[j] == 0)
+        j++;
+    if (j - i < 256)
+        return false;
+    *end = j;
+    return true;
+}
+
 int CLisa::ProgramFlash(const std::vector<uint16_t>& words, uint32_t base)
 {
     uint32_t    bytes = (uint32_t) words.size() * 2;
@@ -109,8 +125,17 @@ int CLisa::ProgramFlash(const std::vector<uint16_t>& words, uint32_t base)
     // a word per exchange: write it (the address steps by 2), read the status
     SetDebugAddress(base);
     int lastPct = -1;
+    size_t written = 0;
     for (size_t i = 0; i < words.size(); i++)
     {
+        size_t gap_end;
+        if (image_gap(words, i, &gap_end))
+        {
+            i = gap_end - 1;                                    // left erased
+            SetDebugAddress(base + 2 * (uint32_t) gap_end);
+            continue;
+        }
+        written++;
         char cmd[24];
         snprintf(cmd, sizeof cmd, "w20%04x\nr22\n", words[i]);
         if (Exchange(cmd, st) != 0)
@@ -136,7 +161,8 @@ int CLisa::ProgramFlash(const std::vector<uint16_t>& words, uint32_t base)
             return -1;
         }
     }
-    Printf("programmed %zu words at 0x%06x in %.1f s", words.size(), base, (now_ms() - t0) / 1000);
+    Printf("programmed %zu words at 0x%06x in %.1f s%s", written, base, (now_ms() - t0) / 1000,
+           written < words.size() ? " (the gaps between the code banks left erased)" : "");
     return 0;
 }
 
@@ -150,6 +176,13 @@ int CLisa::VerifyFlash(const std::vector<uint16_t>& words, uint32_t base, bool q
     SetDebugAddress(base);
     for (size_t i = 0; i < words.size(); i++)
     {
+        size_t gap_end;
+        if (image_gap(words, i, &gap_end))
+        {
+            i = gap_end - 1;
+            SetDebugAddress(base + 2 * (uint32_t) gap_end);
+            continue;
+        }
         if (Exchange("r20\n", v) != 0)
         {
             Printf("no answer reading word %zu", i);

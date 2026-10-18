@@ -194,28 +194,35 @@ private:
     bool                WantAllKeys(void) override { return IsSetupTab(); }
     void                SaveWatchItems(FILE *fd) override;
     void                RestoreOtherPref(char *pPref, char *pStr) override;
-    int                 ReadRam(uint16_t addr, uint8_t *buf, int n);
+    int                 ReadRam(uint16_t addr, uint8_t *buf, int n, int bank = -1);
+    // the second chip's bank registers (ttsky26d RESPIN 22): 0 code, 1 data,
+    // 2 stack; 1 on TT07 (no banks)
+    unsigned            Bank(int which);
+    void                SetBank(int which, unsigned n);
+    lisa::CodeAddr      PhysPC(uint32_t pc);                 // a window PC through the code bank
+    std::string         CAddr(lisa::CodeAddr a);             // "0x1234", or "2:0x4000" in a bank
+    bool                StrayBankHalt(void);                 // halted at a breakpoint's window address in another bank
     bool                ReadCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uint32_t& acc);
-    uint16_t            CodeWord(uint16_t pc);
+    uint16_t            CodeWord(lisa::CodeAddr pc);
     bool                WaitHalt(int timeoutMs);
     void                Grant(void);
     void                Reclaim(void);
     bool                RunGranted(int timeoutMs);
-    uint16_t            SafeStop(uint16_t x);
+    lisa::CodeAddr      SafeStop(lisa::CodeAddr x);
     bool                RequireHalted(void);
     bool                SafeHalt(void);
     bool                LogicalCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uint32_t& acc, bool *pShifted = NULL);
-    int                 RunToStops(const std::vector<uint16_t>& stops, int timeoutMs);
-    int                 StepInsn(void);
+    long                RunToStops(const std::vector<lisa::CodeAddr>& stops, int timeoutMs);
+    long                StepInsn(void);
     int                 StepToLine(int mode);
-    bool                ResolveLocation(const char *spec, uint16_t& addr, std::string& what);
+    bool                ResolveLocation(const char *spec, lisa::CodeAddr& addr, std::string& what);
     void                ShowLocation(bool activate);
     lisa_src_t *        SourceForFile(const std::string& file);
     bool                IsCdbSource(lisa_src_t *pSrc) { return pSrc->cdb_file[0] != 0; }
     int                 PCLineOf(lisa_src_t *pSrc, uint32_t pc);
     bool                IsBreakLine(lisa_src_t *pSrc, int line);
     lisa::Cdb::Frame    FrameHere(const lisa::CdbFunction **ppFn, uint32_t *pPc = NULL);
-    static std::vector<uint16_t> NextPCs(uint16_t op, uint16_t pc, uint16_t ra, uint16_t ix);
+    static std::vector<lisa::CodeAddr> NextPCs(uint16_t op, lisa::CodeAddr pc, uint16_t ra, uint16_t ix, unsigned code_bank);
 
     // LISA-specific interface
     int                 ReadReg(uint8_t reg, uint32_t &value);
@@ -245,6 +252,8 @@ private:
     int                 ProcessKey(int key);
 
 private:
+    friend struct RamReader;                 // LisaCdb.cxx: the source level's data reader
+    friend struct RamReader ram_reader(CLisa *, uint32_t, bool);
     ser_params_t*       m_pSer;
     int                 m_PortOpen;
     int                 m_Running;
@@ -258,6 +267,9 @@ private:
     char              * m_Paths[LISA_MAX_PATHS];
     lisa_src_t        * m_pSrcs;
     uint16_t            m_Breakpoints[4];
+    unsigned            m_BreakBank[4];     // the code bank a breakpoint at or above 0x4000 is meant for
+    unsigned            m_LastCodeBank;     // the code bank at the last halt (PhysPC)
+    std::vector<lisa::CodeAddr> m_Wanted;   // the stops RunToStops runs to (physical)
     char                m_token[256];
     char                m_TermLineText[512];
     int                 m_TermLineLen;
@@ -271,12 +283,12 @@ private:
     int                 m_TermTopLine;
     int                 m_TermLineCount;
     lisa::Cdb           m_Cdb;
-    std::vector<uint16_t> m_Program;        // the image `debug` loaded (code words, by PC)
+    std::vector<uint16_t> m_Program;        // the image `debug` loaded (code words, by physical address)
     std::string         m_ProgramPath;
     uint16_t            m_Halted;           // the last halt seen by the source-level commands
     // stops moved past a store (the TT07 breakpoint hazard, Cdb::is_store):
     // the address planted -> { the address meant, the SP change between }
-    std::map<uint16_t, std::pair<uint16_t, int> > m_Shift;
+    std::map<lisa::CodeAddr, std::pair<lisa::CodeAddr, int> > m_Shift;
     std::string         m_OutLine;          // the program's output, a partial line
     bool                m_ImagesOnly;       // file completion offers program images only
     bool                m_Rev2;             // the second chip's stack convention (rev2 on|off, saved in .tui_prefs)

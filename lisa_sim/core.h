@@ -72,7 +72,7 @@ public:
     // Debug control.  Resuming steps over a breakpoint at the current PC
     // (the one just hit) instead of hitting it again.
     void halt()    { halted_ = true; }
-    void resume()  { halted_ = false; bp_skip_pc_ = pc_; }
+    void resume()  { halted_ = false; bp_skip_pc_ = code_pa(pc_); }
     bool is_halted() const { return halted_; }
 
     // The calls in flight, for backtraces and stepping over calls: a
@@ -80,8 +80,10 @@ public:
     // interrupt) and by an interrupt, and popped by the return to it -
     // the topmost frame whose return address matches, so a jal used as a
     // jump, whose RA is never returned to, is dropped along with it.
+    // Code addresses here are physical (code_pa: the code bank of a PC at
+    // or above 0x4000 on the second chip; the window PC otherwise).
     struct CallFrame {
-        uint16_t ret_pc;    // where the return goes
+        uint32_t ret_pc;    // where the return goes (physical)
         uint16_t sp;        // SP when the call was made: the callee's entry SP
         bool     isr;       // an interrupt (returned by rets)
     };
@@ -89,11 +91,14 @@ public:
 
     // Breakpoints
     static constexpr int MAX_BREAKPOINTS = 6;
-    bool add_breakpoint(uint16_t addr);
-    bool remove_breakpoint(uint16_t addr);
+    // at physical code addresses: one in a code bank halts only while that
+    // bank is switched in
+    bool add_breakpoint(uint32_t addr);
+    bool remove_breakpoint(uint32_t addr);
     void clear_breakpoints();
-    bool is_breakpoint(uint16_t addr) const;
-    int  get_breakpoints(uint16_t* addrs, int max) const;
+    bool is_breakpoint(uint32_t addr) const;
+    int  get_breakpoints(uint32_t* addrs, int max) const;
+    uint32_t pc_phys() const { return code_pa(pc_); }
 
     // Interrupt request (bits correspond to int sources 0-7)
     void set_interrupt(uint8_t mask);
@@ -157,9 +162,9 @@ private:
     uint16_t last_inst_;
 
     // Breakpoints
-    uint16_t breakpoints_[MAX_BREAKPOINTS];
+    uint32_t breakpoints_[MAX_BREAKPOINTS];
     bool     bp_active_[MAX_BREAKPOINTS];
-    uint16_t bp_skip_pc_ = 0xFFFF;
+    uint32_t bp_skip_pc_ = 0xFFFFFFFF;
 
     // Shadow call stack
     std::vector<CallFrame> calls_;

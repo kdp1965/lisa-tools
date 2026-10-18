@@ -26,7 +26,7 @@ LisaCli::LisaCli(LisaSimulator& sim)
     : sim_(sim), quit_(false) {
     sim_.set_stop_callback([this] {
         auto st = sim_.get_state();
-        printf("\n[%s at PC=%04X]\n", sim_.core().is_breakpoint(st.pc) ? "Breakpoint" : "Halted", st.pc);
+        printf("\n[%s at PC=%s]\n", sim_.core().is_breakpoint(sim_.core().pc_phys()) ? "Breakpoint" : "Halted", caddr(sim_.core().pc_phys()).c_str());
         print_location();
         fflush(stdout);
     });
@@ -263,13 +263,13 @@ void LisaCli::print_location() {
     auto st = sim_.get_state();
     uint16_t inst = sim_.memory().inst_read(sim_.core().code_pa(st.pc));
     uint16_t next = sim_.memory().inst_read(sim_.core().code_pa(st.pc + 1));
-    printf("PC=%04X  %04X  %-24s A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
-           st.pc, inst, lisa_disasm(inst, st.pc, next).c_str(),
+    printf("PC=%s  %04X  %-24s A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
+           caddr(sim_.core().pc_phys()).c_str(), inst, lisa_disasm(inst, st.pc, next).c_str(),
            st.a, st.ix, st.sp, st.zflag, st.cflag);
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) return;
-    const lisa::CdbFunction* f = cdb.function_at(st.pc);
-    const lisa::CdbLine* l = cdb.line_at(st.pc);
+    const lisa::CdbFunction* f = cdb.function_at(sim_.core().pc_phys());
+    const lisa::CdbLine* l = cdb.line_at(sim_.core().pc_phys());
     if (l) {
         std::string src = cdb.source(l->file, l->line);
         size_t b = src.find_first_not_of(" \t");
@@ -413,6 +413,30 @@ uint32_t LisaCli::code_phys(uint32_t a) {
     return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & 0x3FFFF);
 }
 
+// a physical code address as text: the window address, with its bank in
+// front when it is in a bank other than 1 (bank 1 is TT07's upper half)
+std::string LisaCli::caddr(uint32_t a) {
+    char b[24];
+    if (a < 0x8000) snprintf(b, sizeof b, "%04X", a);
+    else snprintf(b, sizeof b, "%X:%04X", a >> 14, 0x4000 | (a & 0x3FFF));
+    return b;
+}
+
+// "*addr" / "0xaddr" of a code location: bank:addr (hex) or an address as
+// code_phys takes it
+uint32_t LisaCli::parse_code(const std::string& s) {
+    size_t c = s.find(':');
+    if (c != std::string::npos)
+        return lisa::Cdb::phys((uint16_t)parse_addr(s.substr(c + 1)), (unsigned)parse_addr(s.substr(0, c)));
+    return code_phys(parse_addr(s));
+}
+
+// a data byte for the source-level views: SP-relative data (at or above
+// SP: the frames) through the stack bank, the rest through the data bank
+uint8_t LisaCli::rd_data(uint16_t a) {
+    return sim_.memory().data_read(sim_.core().data_pa(a, a >= sim_.get_state().sp));
+}
+
 void LisaCli::cmd_mem(const std::vector<std::string>& args) {
     if (args.size() < 2) {
         printf("Usage: mem <addr> [length]\n");
@@ -458,9 +482,9 @@ void LisaCli::cmd_bp(const std::vector<std::string>& args) {
         printf("Usage: bp <addr>\n");
         return;
     }
-    uint16_t addr = parse_addr(args[1]) & 0x7FFF;
+    uint32_t addr = parse_code(args[1]);
     if (sim_.core().add_breakpoint(addr))
-        printf("Breakpoint set at %04X\n", addr);
+        printf("Breakpoint set at %s\n", caddr(addr).c_str());
     else
         printf("Error: max breakpoints reached (%d)\n", LisaCore::MAX_BREAKPOINTS);
 }
@@ -471,24 +495,24 @@ void LisaCli::cmd_bpd(const std::vector<std::string>& args) {
         printf("Usage: bpd <addr>\n");
         return;
     }
-    uint16_t addr = parse_addr(args[1]) & 0x7FFF;
+    uint32_t addr = parse_code(args[1]);
     if (sim_.core().remove_breakpoint(addr))
-        printf("Breakpoint removed at %04X\n", addr);
+        printf("Breakpoint removed at %s\n", caddr(addr).c_str());
     else
-        printf("No breakpoint at %04X\n", addr);
+        printf("No breakpoint at %s\n", caddr(addr).c_str());
 }
 
 void LisaCli::cmd_bpl() {
-    uint16_t addrs[LisaCore::MAX_BREAKPOINTS];
+    uint32_t addrs[LisaCore::MAX_BREAKPOINTS];
     int n = sim_.core().get_breakpoints(addrs, LisaCore::MAX_BREAKPOINTS);
     if (n == 0) {
         printf("No breakpoints set\n");
     } else {
         printf("Breakpoints:\n");
         for (int i = 0; i < n; i++) {
-            uint16_t inst = sim_.memory().inst_read(sim_.core().code_pa(addrs[i]));
-            uint16_t next = sim_.memory().inst_read(sim_.core().code_pa(addrs[i] + 1));
-            printf("  [%d] %04X: %-24s", i, addrs[i], lisa_disasm(inst, addrs[i], next).c_str());
+            uint16_t inst = sim_.memory().inst_read(addrs[i]);
+            uint16_t next = sim_.memory().inst_read(addrs[i] + 1);
+            printf("  [%d] %s: %-24s", i, caddr(addrs[i]).c_str(), lisa_disasm(inst, lisa::Cdb::window(addrs[i]), next).c_str());
             const lisa::CdbLine* l = sim_.cdb().loaded() ? sim_.cdb().line_at(addrs[i]) : nullptr;
             if (l) printf("  %s:%d in %s()", l->file.c_str(), l->line, sim_.cdb().function_at(addrs[i])->name.c_str());
             printf("\n");
@@ -677,9 +701,9 @@ static bool all_digits(const std::string& s) {
 
 // Did the function save RA before pc was reached?  Its sra is in the
 // prologue, so look between the entry and pc (at most a few words in).
-bool LisaCli::frame_ra_saved(const lisa::CdbFunction& f, uint16_t pc) {
-    for (uint16_t a = f.addr; a < pc && a < f.addr + 16; a++)
-        if ((sim_.memory().inst_read(sim_.core().code_pa(a)) & 0xFFFC) == 0xA160)      // sra
+bool LisaCli::frame_ra_saved(const lisa::CdbFunction& f, uint32_t pc) {
+    for (uint32_t a = f.addr; a < pc && a < f.addr + 16; a++)
+        if ((sim_.memory().inst_read(a) & 0xFFFC) == 0xA160)      // sra
             return true;
     return false;
 }
@@ -687,12 +711,12 @@ bool LisaCli::frame_ra_saved(const lisa::CdbFunction& f, uint16_t pc) {
 // The frame `depth` calls up from the halted one: its PC (an outer
 // frame's is the return address into it), its function, and what print
 // needs - the entry SP comes from the shadow call stack.
-lisa::Cdb::Frame LisaCli::frame_of(size_t depth, uint16_t& pc, const lisa::CdbFunction** fn) {
+lisa::Cdb::Frame LisaCli::frame_of(size_t depth, uint32_t& pc, const lisa::CdbFunction** fn) {
     auto st = sim_.get_state();
     const auto& calls = sim_.core().call_stack();
     size_t n = calls.size();
     lisa::Cdb::Frame fr;
-    pc = depth == 0 ? st.pc : calls[n - depth].ret_pc;
+    pc = depth == 0 ? sim_.core().pc_phys() : calls[n - depth].ret_pc;
     fr.entry_sp = depth < n ? calls[n - 1 - depth].sp : 0x7fff;
     const lisa::CdbFunction* f = sim_.cdb().function_at(depth == 0 ? pc : pc - 1);
     if (f) {
@@ -708,10 +732,10 @@ lisa::Cdb::Frame LisaCli::frame_of(size_t depth, uint16_t& pc, const lisa::CdbFu
 
 // file:line, a line in the file last listed (or the PC's), a function, or
 // *addr / 0xaddr
-bool LisaCli::resolve_location(const std::string& spec, uint16_t& addr, std::string& what) {
+bool LisaCli::resolve_location(const std::string& spec, uint32_t& addr, std::string& what) {
     const lisa::Cdb& cdb = sim_.cdb();
     if (spec[0] == '*' || spec.rfind("0x", 0) == 0) {
-        addr = parse_addr(spec[0] == '*' ? spec.substr(1) : spec.substr(2)) & 0x7FFF;
+        addr = parse_code(spec[0] == '*' ? spec.substr(1) : spec.substr(2));
         const lisa::CdbLine* l = cdb.loaded() ? cdb.line_at(addr) : nullptr;
         what = l ? l->file + ":" + std::to_string(l->line) : "";
         return true;
@@ -728,7 +752,7 @@ bool LisaCli::resolve_location(const std::string& spec, uint16_t& addr, std::str
         line = atoi(spec.c_str() + colon + 1);
     } else if (all_digits(spec)) {
         line = atoi(spec.c_str());
-        const lisa::CdbLine* here = cdb.line_at(sim_.get_state().pc);
+        const lisa::CdbLine* here = cdb.line_at(sim_.core().pc_phys());
         file = !list_file_.empty() ? list_file_ : here ? here->file : cdb.files().empty() ? "" : cdb.files()[0];
     } else {
         const lisa::CdbFunction* f = cdb.function(spec);
@@ -743,7 +767,7 @@ bool LisaCli::resolve_location(const std::string& spec, uint16_t& addr, std::str
         what = f->name + "()" + (l ? " at " + l->file + ":" + std::to_string(l->line) : "");
         return true;
     }
-    std::vector<uint16_t> addrs = cdb.addrs_of_line(file, line);
+    std::vector<lisa::CodeAddr> addrs = cdb.addrs_of_line(file, line);
     if (addrs.empty()) {
         const lisa::CdbLine* nl = cdb.next_line_with_code(file, line);
         if (!nl) {
@@ -765,11 +789,11 @@ void LisaCli::cmd_break(const std::vector<std::string>& args) {
         printf("Usage: break <file:line | line | function | *addr>\n");
         return;
     }
-    uint16_t addr;
+    uint32_t addr;
     std::string what;
     if (!resolve_location(args[1], addr, what)) return;
     if (sim_.core().add_breakpoint(addr)) {
-        printf("Breakpoint at %04X", addr);
+        printf("Breakpoint at %s", caddr(addr).c_str());
         if (!what.empty()) printf(": %s", what.c_str());
         printf("\n");
     } else {
@@ -784,16 +808,16 @@ void LisaCli::cmd_list(const std::vector<std::string>& args) {
         return;
     }
     auto st = sim_.get_state();
-    const lisa::CdbLine* here = cdb.line_at(st.pc);
+    const lisa::CdbLine* here = cdb.line_at(sim_.core().pc_phys());
     std::string file = list_file_;
     int start;
     if (args.size() > 1) {                                   // around a location
-        uint16_t addr;
+        uint32_t addr;
         std::string what;
         if (!resolve_location(args[1], addr, what)) return;
         const lisa::CdbLine* l = cdb.line_at(addr);
         if (!l) {
-            printf("No source for %04X\n", addr);
+            printf("No source for %s\n", caddr(addr).c_str());
             return;
         }
         file = l->file;
@@ -818,7 +842,7 @@ void LisaCli::cmd_list(const std::vector<std::string>& args) {
         printf("End of %s\n", file.c_str());
         return;
     }
-    uint16_t bps[LisaCore::MAX_BREAKPOINTS];
+    uint32_t bps[LisaCore::MAX_BREAKPOINTS];
     int nbp = sim_.core().get_breakpoints(bps, LisaCore::MAX_BREAKPOINTS);
     for (int i = start; i < start + 10 && i <= n; i++) {
         char mark = ' ';
@@ -844,9 +868,9 @@ void LisaCli::cmd_next(bool into) {
         return;
     }
     auto st = sim_.get_state();
-    const lisa::CdbLine* l0 = cdb.line_at(st.pc);
+    const lisa::CdbLine* l0 = cdb.line_at(sim_.core().pc_phys());
     size_t depth0 = sim_.core().call_stack().size();
-    uint16_t prev_pc = st.pc;
+    uint32_t prev_pc = sim_.core().pc_phys();
     sim_.core().resume();
     long budget = 50000000;
     bool reached = false;
@@ -856,7 +880,7 @@ void LisaCli::cmd_next(bool into) {
             reached = true;
             break;
         }
-        uint16_t pc = sim_.get_state().pc;
+        uint32_t pc = sim_.core().pc_phys();
         size_t depth = sim_.core().call_stack().size();
         if (depth > depth0 && !into) continue;               // inside a call
         if (depth < depth0) {                                // returned: any line stops
@@ -883,14 +907,19 @@ void LisaCli::cmd_finish() {
         return;
     }
     size_t depth0 = calls.size();
-    const lisa::CdbFunction* f = sim_.cdb().loaded() ? sim_.cdb().function_at(sim_.get_state().pc) : nullptr;
+    const lisa::CdbFunction* f = sim_.cdb().loaded() ? sim_.cdb().function_at(sim_.core().pc_phys()) : nullptr;
     printf("Run till exit from %s\n", f ? (f->name + "()").c_str() : "the current call");
     sim_.core().resume();
     long budget = 50000000;
     bool reached = false;
+    auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     while (budget-- > 0) {
         sim_.step();
-        if (sim_.core().is_halted() || sim_.core().call_stack().size() < depth0) {
+        if (sim_.core().is_halted()) { reached = true; break; }
+        if (sim_.core().call_stack().size() < depth0) {
+            // a __banked function returns into ___sdcc_bcall first: on to
+            // the trampoline's own return, into the caller
+            if (lisa::Cdb::is_bcall_return(sim_.core().pc_phys(), rc)) { depth0--; continue; }
             reached = true;
             break;
         }
@@ -912,14 +941,14 @@ void LisaCli::cmd_print(const std::vector<std::string>& args) {
     }
     std::string expr;
     for (size_t i = 1; i < args.size(); i++) expr += args[i];
-    uint16_t pc;
+    uint32_t pc;
     const lisa::CdbFunction* f;
     lisa::Cdb::Frame fr = frame_of(0, pc, &f);
     std::string err;
     std::string s = cdb.print(expr, f ? &fr : nullptr, &err,
-                              [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); },
+                              [this](uint16_t a) { return rd_data(a); },
                               [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); },
-                              [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); });
+                              [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); });
     if (s.empty())
         printf("%s\n", err.c_str());
     else
@@ -932,16 +961,16 @@ void LisaCli::cmd_locals() {
         printf("No debug info loaded: sdcc --debug writes <firmware>.cdb beside the .ihx\n");
         return;
     }
-    uint16_t pc;
+    uint32_t pc;
     const lisa::CdbFunction* f;
     lisa::Cdb::Frame fr = frame_of(0, pc, &f);
     if (!f) {
-        printf("PC=%04X is not in a C function\n", pc);
+        printf("PC=%s is not in a C function\n", caddr(pc).c_str());
         return;
     }
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
+    auto rd = [this](uint16_t a) { return rd_data(a); };
     auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
+    auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     printf("%s(), entry SP=%04X%s:\n", f->name.c_str(), fr.entry_sp, fr.ra_saved ? ", RA saved" : "");
     for (int pass = 0; pass < 2; pass++) {                   // arguments, then locals
         for (const lisa::CdbSymbol* s : cdb.locals(f->name)) {
@@ -962,15 +991,21 @@ void LisaCli::cmd_locals() {
 void LisaCli::cmd_bt(const std::vector<std::string>& args) {
     const lisa::Cdb& cdb = sim_.cdb();
     const auto& calls = sim_.core().call_stack();
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
+    auto rd = [this](uint16_t a) { return rd_data(a); };
     auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
+    auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     if (args.size() > 1 && args[1] == "chip") {
         // the unwinder, each frame checked against the shadow call stack
         if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
         auto st = sim_.get_state();
-        auto frames = cdb.unwind(st.pc, st.sp, st.ra, rd, rc);
-        size_t n = calls.size();
+        auto frames = cdb.unwind(sim_.core().pc_phys(), st.sp, st.ra, rd, rc, 32, sim_.periph().code_bank());
+        // the shadow stack has a frame for each call into ___sdcc_bcall's
+        // `call ix` as well; the unwinder steps over the trampoline
+        std::vector<LisaCore::CallFrame> sh_calls;
+        for (const auto& c : calls)
+            if (!lisa::Cdb::is_bcall_return(c.ret_pc, rc)) sh_calls.push_back(c);
+            else if (!sh_calls.empty()) sh_calls.back().sp = c.sp;   // the callee's entry SP is the trampoline's
+        size_t n = sh_calls.size();
         for (size_t i = 0; i < frames.size(); i++) {
             const auto& fr = frames[i];
             lisa::Cdb::Frame cf;
@@ -988,30 +1023,31 @@ void LisaCli::cmd_bt(const std::vector<std::string>& args) {
             // the shadow stack's view of the same frame
             std::string check;
             if (i < n) {
-                const auto& sh = calls[n - 1 - i];
+                const auto& sh = sh_calls[n - 1 - i];
                 bool ok = sh.sp == fr.entry_sp && sh.ret_pc == fr.ret_pc;
                 check = ok ? "  [= shadow]" : "  [shadow: entry SP " + std::to_string(sh.sp) + " ret " + std::to_string(sh.ret_pc) + "]";
             } else check = "  [no shadow frame]";
-            printf("#%-2zu %04X  %s(%s)", i, fr.pc, fr.function->name.c_str(), params.c_str());
+            printf("#%-2zu %s  %s(%s)", i, caddr(fr.pc).c_str(), fr.function->name.c_str(), params.c_str());
             if (l) printf(" at %s:%d", l->file.c_str(), l->line);
-            printf("  entry SP=%04X ret=%04X%s%s\n", fr.entry_sp, fr.ret_pc, fr.ra_saved ? "" : " (RA in register)", check.c_str());
+            printf("  entry SP=%04X ret=%s%s%s%s\n", fr.entry_sp, caddr(fr.ret_pc).c_str(), fr.via_bcall ? " (through ___sdcc_bcall)" : "",
+                   fr.ra_saved ? "" : " (RA in register)", check.c_str());
         }
         if (frames.size() < n) printf("(the shadow stack has %zu more frame(s))\n", n - frames.size());
         return;
     }
     for (size_t depth = 0; depth <= calls.size() && depth < 32; depth++) {
-        uint16_t pc;
+        uint32_t pc;
         const lisa::CdbFunction* f = nullptr;
         lisa::Cdb::Frame fr;
         if (cdb.loaded())
             fr = frame_of(depth, pc, &f);
         else
-            pc = depth == 0 ? sim_.get_state().pc : calls[calls.size() - depth].ret_pc;
+            pc = depth == 0 ? sim_.core().pc_phys() : calls[calls.size() - depth].ret_pc;
         if (depth > 0 && calls[calls.size() - depth].isr)
             printf("    <interrupt>\n");
-        printf("#%-2zu %04X", depth, pc);
+        printf("#%-2zu %s", depth, caddr(pc).c_str());
         if (!f) {
-            printf("  ??\n");
+            printf(depth > 0 && lisa::Cdb::is_bcall_return(pc, rc) ? "  ___sdcc_bcall (the code bank switch)\n" : "  ??\n");
             continue;
         }
         std::string params;
@@ -1032,16 +1068,17 @@ void LisaCli::cmd_exits(bool into) {
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
     auto st = sim_.get_state();
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
-    auto frames = cdb.unwind(st.pc, st.sp, st.ra, rd, rc, 1);
-    uint16_t ret = frames.empty() ? 0 : frames[0].ret_pc;
-    auto ex = cdb.line_exits(st.pc, into, ret, rc);
-    printf("%s from %04X: %zu stop(s)%s\n", into ? "into" : "next", st.pc, ex.stops.size(), ex.unknown ? ", a path unaccounted for" : "");
-    for (uint16_t a : ex.stops) {
+    auto rd = [this](uint16_t a) { return rd_data(a); };
+    auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
+    uint32_t pc0 = sim_.core().pc_phys();
+    auto frames = cdb.unwind(pc0, st.sp, st.ra, rd, rc, 1, sim_.periph().code_bank());
+    uint32_t ret = frames.empty() ? 0 : frames[0].ret_pc;
+    auto ex = cdb.line_exits(pc0, into, ret, rc);
+    printf("%s from %s: %zu stop(s)%s\n", into ? "into" : "next", caddr(pc0).c_str(), ex.stops.size(), ex.unknown ? ", a path unaccounted for" : "");
+    for (uint32_t a : ex.stops) {
         const lisa::CdbLine* l = cdb.line_at(a);
         const lisa::CdbFunction* f = cdb.function_at(a);
-        printf("  %04X", a);
+        printf("  %s", caddr(a).c_str());
         if (l) printf("  %s:%d in %s()", l->file.c_str(), l->line, f->name.c_str());
         if (a == ret) printf("  (the return)");
         printf("\n");
@@ -1058,31 +1095,32 @@ void LisaCli::cmd_nexthw(int mode) {
     if (!require_stopped("nexthw")) return;
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
+    auto rd = [this](uint16_t a) { return rd_data(a); };
+    auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     long budget = 50000000;
     bool finishing = mode == 2;
     for (int round = 0; ; round++) {
         if (round == 100) { printf("Still not at a line start after 100 runs\n"); break; }
         auto st = sim_.get_state();
-        auto frames = cdb.unwind(st.pc, st.sp, st.ra, rd, rc, 1);
-        uint16_t ret = frames.empty() ? 0 : frames[0].ret_pc;
+        uint32_t pc0 = sim_.core().pc_phys();
+        auto frames = cdb.unwind(pc0, st.sp, st.ra, rd, rc, 1, sim_.periph().code_bank());
+        uint32_t ret = frames.empty() ? 0 : frames[0].ret_pc;
         uint16_t entry_sp = frames.empty() ? st.sp : frames[0].entry_sp;
-        std::vector<uint16_t> stops;
+        std::vector<uint32_t> stops;
         if (finishing) {
             if (!ret) { printf("No return address known\n"); return; }
             stops.push_back(ret);
         } else {
-            auto ex = cdb.line_exits(st.pc, mode == 1, ret, rc);
+            auto ex = cdb.line_exits(pc0, mode == 1, ret, rc);
             if (ex.unknown) printf("(a path out of this line is unaccounted for: a jmp ix, or no return address)\n");
             stops = ex.stops;
             if (stops.size() > 6) { printf("%zu exits: more than the breakpoints (falling back to stepping would be next)\n", stops.size()); return; }
         }
         // plant, run, remove
-        uint16_t had[LisaCore::MAX_BREAKPOINTS];
+        uint32_t had[LisaCore::MAX_BREAKPOINTS];
         int nhad = sim_.core().get_breakpoints(had, LisaCore::MAX_BREAKPOINTS);
         sim_.core().clear_breakpoints();
-        for (uint16_t a : stops) sim_.core().add_breakpoint(a);
+        for (uint32_t a : stops) sim_.core().add_breakpoint(a);
         sim_.core().resume();
         bool halted = false;
         while (budget-- > 0) { sim_.step(); if (sim_.core().is_halted()) { halted = true; break; } }
@@ -1090,23 +1128,24 @@ void LisaCli::cmd_nexthw(int mode) {
         for (int i = 0; i < nhad; i++) sim_.core().add_breakpoint(had[i]);
         if (!halted) { printf("Gave up after 50M instructions\n"); break; }
         auto now = sim_.get_state();
+        uint32_t now_pc = sim_.core().pc_phys();
         bool user_bp = false;
-        for (int i = 0; i < nhad; i++) if (had[i] == now.pc) user_bp = true;
-        bool ours = std::find(stops.begin(), stops.end(), now.pc) != stops.end();
+        for (int i = 0; i < nhad; i++) if (had[i] == now_pc) user_bp = true;
+        bool ours = std::find(stops.begin(), stops.end(), now_pc) != stops.end();
         if (user_bp && !ours) break;                                 // the user's breakpoint
-        if (!cdb.function_at(now.pc)) {                              // out of the C code (the program ended)
-            printf("(left the C code at %04X)\n", now.pc);
+        if (!cdb.function_at(now_pc)) {                              // out of the C code (the program ended)
+            printf("(left the C code at %s)\n", caddr(now_pc).c_str());
             break;
         }
         if (finishing) {                                             // back in the caller, mid-statement
-            if (now.sp < entry_sp) { printf("(a deeper frame returned at %04X, SP=%04X: going on)\n", now.pc, now.sp); continue; }
+            if (now.sp < entry_sp) { printf("(a deeper frame returned at %s, SP=%04X: going on)\n", caddr(now_pc).c_str(), now.sp); continue; }
             finishing = false;
             continue;
         }
-        if (cdb.line_starting(now.pc)) {
+        if (cdb.line_starting(now_pc)) {
             // the same line start in a deeper recursion of this function
-            if (now.sp < st.sp && cdb.function_at(now.pc) == cdb.function_at(st.pc)) {
-                printf("(deeper frame at %04X, SP=%04X: going on)\n", now.pc, now.sp);
+            if (now.sp < st.sp && cdb.function_at(now_pc) == cdb.function_at(pc0)) {
+                printf("(deeper frame at %s, SP=%04X: going on)\n", caddr(now_pc).c_str(), now.sp);
                 continue;
             }
             break;

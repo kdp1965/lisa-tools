@@ -21,12 +21,22 @@ bool load_hex_image(const std::string& path, std::vector<uint16_t>& words, std::
         rewind(fp);
     }
     if (intel) {                                        // :LLAAAARR[DD...]CC
+        // type 02 / 04 records carry the address above 64 KB: code in the
+        // second chip's banks (bank n at byte n * 0x8000), so a word's index
+        // is its physical address (Cdb's CodeAddr)
+        unsigned upper = 0;
         while (fgets(line, sizeof line, fp)) {
             if (line[0] != ':') continue;
             unsigned len, addr, type;
             if (sscanf(line + 1, "%02x%04x%02x", &len, &addr, &type) != 3) continue;
             if (type == 1) break;
+            if (type == 2 || type == 4) {
+                unsigned v;
+                if (sscanf(line + 9, "%04x", &v) == 1) upper = type == 4 ? v << 16 : v << 4;
+                continue;
+            }
             if (type != 0) continue;
+            addr += upper;
             if (addr + len > bytes.size()) bytes.resize(addr + len, 0);
             for (unsigned i = 0; i < len; i++) {
                 unsigned v;
@@ -76,7 +86,7 @@ bool load_hex_image(const std::string& path, std::vector<uint16_t>& words, std::
         if (err) *err = path + ": no program in it";
         return false;
     }
-    if (words.size() > 32768) words.resize(32768);
+    if (words.size() > (1u << 18)) words.resize(1u << 18);    // 16 code banks of 16K words
     return true;
 }
 

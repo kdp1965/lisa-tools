@@ -141,6 +141,7 @@ class LisaPyDb:
       if not lines or not lines[0].startswith(':'):
          # lisa_as output: one 16-bit opcode in hex per line
          self.opcodes = [line.lower() for line in lines]
+         self.segments = [(0, list(self.opcodes))]
          return
       # Intel HEX (sdcc -mlisa): byte addresses, two bytes per word, low
       # byte first (as lisa_sim's loader); gaps are zero.  Type 02 / 04
@@ -159,6 +160,16 @@ class LisaPyDb:
                data[upper + addr + i] = int(line[9 + 2 * i:11 + 2 * i], 16)
       words = (max(data) + 2) // 2 if data else 0
       self.opcodes = [f'{data.get(2 * w + 1, 0):02x}{data.get(2 * w, 0):02x}' for w in range(words)]
+      # the runs of words the file holds, (first word, [words]): a program
+      # with code banks has code at byte 0x10000 and up (bank n at n *
+      # 0x8000) and nothing in between - loadFlash writes the runs only
+      used = sorted({a // 2 for a in data})
+      self.segments = []
+      for w in used:
+         if self.segments and self.segments[-1][0] + len(self.segments[-1][1]) == w:
+            self.segments[-1][1].append(self.opcodes[w])
+         else:
+            self.segments.append((w, [self.opcodes[w]]))
 
    # =============================================
    # Halt the lisa core
@@ -199,23 +210,38 @@ class LisaPyDb:
       # First set the FLASH base address
       self.setFlashBase()
 
-      # Set the debug address to zero
-      addr = 0
-      for i in self.opcodes:
-         self.sio.write(f'r20\n')
-         self.sio.flush()
-         line = self.sio.readline().rstrip()
-         if line != i:
-            print(f'Opcode mismatch at address {addr:4x}:  Expected {i} got {line}') 
-            break
-      else:
-         print("passed")
+      # Read back each run of words from its address
+      segs = getattr(self, 'segments', None) or [(0, list(self.opcodes))]
+      for w, ops in segs:
+         self.setDebugAddr(self.args.flashbase + 2 * w)
+         for k, i in enumerate(ops):
+            self.sio.write(f'r20\n')
+            self.sio.flush()
+            line = self.sio.readline().rstrip()
+            if line != i:
+               print(f'Opcode mismatch at word {w + k:05x}:  Expected {i} got {line}')
+               return
+      print("passed")
 
    # =============================================
    # Read data SRAM.  Format of data is addr,len
    # =============================================
    def readData(self, data):
       v = data.split(',')
+      if ':' in v[0]:
+         # bank:addr,len - through the core's data port and the cache, the
+         # data bank switched for the read (the core is halted)
+         try:
+            b, a = (int(x, 16) for x in v[0].split(':'))
+            n = int(v[1])
+         except Exception:
+            print('Format of --data with a bank is:   --data=bank:addr,len   (hex bank and addr)')
+            return
+         self.halt()
+         d = self.readRam(a, n, b)
+         for k in range(0, n, 16):
+            print(f'{b:X}:{a + k:04X}: ' + ' '.join(f'{x:02X}' for x in d[k:k + 16]))
+         return
       try:
          a = int(v[0],16)
          len = int(v[1])
@@ -266,6 +292,16 @@ class LisaPyDb:
       sp = self.readSP()
       sp = sp & 0xFFF0
 
+      # The stack is SP-relative data, in the stack bank; the debug port
+      # reads through the data bank, so dump it with the data bank set to
+      # the stack bank (the second chip: the registers read 0 on TT07)
+      if sp + 16 > 0x4000:
+         b = self.readBanks()
+         if b['stack'] and b['stack'] != b['data']:
+            data = self.readRam(sp, 16, b['stack'])
+            print(f'{sp:04X}: ' + ' '.join(f'{d:02X}' for d in data) + f"   (stack bank {b['stack']})")
+            return
+
       # Set the Data bus access address
       self.writeReg(7, sp)
 
@@ -300,6 +336,61 @@ class LisaPyDb:
 
       # Set debug addres to zero so it doesn't hold d_periph high
       self.writeReg(7, 0)
+
+   # =============================================
+   # The debug QSPI interface's byte address (flash / SRAM), 24 bits
+   # =============================================
+   def setDebugAddr(self, a):
+      self.writeReg(0x11, (a >> 16) & 0xff)
+      self.writeReg(0x10, a & 0xffff)
+
+   # =============================================
+   # The bank registers of the second chip (ttsky26d RESPIN 22): the
+   # upper 16K of the code space (fetches) and of the data space (IX-
+   # relative and debugger accesses: data bank; SP-relative: stack bank)
+   # are windows on one of 16 banks.  The debug port reaches the
+   # peripheral space with bit 15 of its data address (register 7), and
+   # its own RAM accesses go through the DATA bank.  The core must be
+   # halted for register 6.
+   # =============================================
+   BANK_REGS = {'code': 0x15, 'data': 0x16, 'stack': 0x17}
+
+   def readByte(self, a):
+      self.writeReg(7, a)
+      v = self.readReg(6)
+      self.sio.readline()
+      return v & 0xff
+
+   def writeByte(self, a, v):
+      self.writeReg(7, a)
+      self.writeReg(6, v & 0xff)
+
+   def readBanks(self):
+      banks = {k: self.readByte(0x8000 | r) & 15 for k, r in self.BANK_REGS.items()}
+      self.writeReg(7, 0)
+      return banks
+
+   def setBank(self, which, n):
+      self.writeByte(0x8000 | self.BANK_REGS[which], n & 15)
+      self.writeReg(7, 0)
+
+   # bytes of data RAM through the cache, an address at or above 0x4000 in
+   # data bank `bank` (None: the bank switched in); the data bank is put
+   # back after
+   def readRam(self, addr, n, bank=None):
+      old = None
+      if bank is not None and addr + n > 0x4000:
+         old = self.readByte(0x8016) & 15
+         self.writeByte(0x8016, bank)
+      self.writeReg(7, addr)
+      out = []
+      for _ in range(n):
+         out.append(self.readReg(6) & 0xff)
+         self.sio.readline()
+      if old is not None:
+         self.writeByte(0x8016, old)
+      self.writeReg(7, 0)
+      return out
 
    # =============================================
    # Set the FLASH base address
@@ -375,24 +466,33 @@ class LisaPyDb:
       # Configure SPI mode 1 and set inter-CS delay to 0xd
       self.writeReg(0x1e, 0x08d3)
 
-      # Set the WREN bit
-      self.writeReg(0x21, 6)
-      
-      # Perform a sector erase
-      print('Erasing FLASH sector...')
-      self.writeReg(0x21, 0x01d8)
-      
-      if not self.awaitFlashReady():
-         print('The FLASH erase did not report complete!!')
-         return
+      segs = getattr(self, 'segments', None) or [(0, list(self.opcodes))]
+      base = self.args.flashbase
+
+      # Erase every 64K block the image touches (a program with code banks
+      # spans several: bank n is at byte n * 0x8000)
+      blocks = sorted({b for w, ops in segs
+                       for b in range((base + 2 * w) >> 16, ((base + 2 * (w + len(ops) - 1)) >> 16) + 1)})
+      for b in blocks:
+         print(f'Erasing FLASH block {b:02x}0000...')
+         self.setDebugAddr(b << 16)
+         # Set the WREN bit, then the 64K block erase at the address
+         self.writeReg(0x21, 6)
+         self.writeReg(0x21, 0x01d8)
+         if not self.awaitFlashReady():
+            print('The FLASH erase did not report complete!!')
+            return
 
       print('Programming FLASH...')
 
-      # Now write all opcodes to the core
-      for i in self.opcodes:
-         self.sio.write(f'w20{i}\n')
-         self.sio.flush()
-         self.awaitFlashReady()
+      # Now write the runs of opcodes, each at its own address
+      for w, ops in segs:
+         self.setDebugAddr(base + 2 * w)
+         for i in ops:
+            self.sio.write(f'w20{i}\n')
+            self.sio.flush()
+            self.awaitFlashReady()
+      self.setDebugAddr(base)
 
       # Ensure the PC is zero and SP is MAX
       self.writePC(0)
@@ -526,7 +626,7 @@ def parseArgs():
       dest = 'data',
       type = str,
       default = "",
-      help='Read data at given address,length.')
+      help='Read data at given address,length (hex address): through the debug QSPI path to the SRAM; bank:addr,len reads through the core and the cache in that data bank.')
   parser.add_argument("--iwidth",
       dest = 'iwidth',
       type = int,
@@ -547,6 +647,16 @@ def parseArgs():
       default = False,
       action = 'store_true',
       help='Single step the processor.')
+  parser.add_argument("--banks",
+      dest = 'banks',
+      default = False,
+      action = 'store_true',
+      help='Show the code, data and stack bank registers (the second chip; halts the core).')
+  parser.add_argument("--bank",
+      dest = 'setbank',
+      action = 'append',
+      default = [],
+      help='Set a bank register: code=N, data=N or stack=N (the second chip; halts the core; repeatable).')
   parser.add_argument("--flashbase",
       dest = 'flashbase',
       default = 0x000000,
@@ -625,6 +735,19 @@ def main():
    # Test if resuesting halt
    if args.halt:
       db.halt()
+
+   # The bank registers
+   for spec in args.setbank:
+      try:
+         which, n = spec.split('=')
+         db.halt()
+         db.setBank(which.strip(), int(n, 0))
+      except Exception:
+         print(f'--bank wants code=N, data=N or stack=N, not {spec}')
+   if args.banks:
+      db.halt()
+      b = db.readBanks()
+      print(f"Banks: code {b['code']:X}  data {b['data']:X}  stack {b['stack']:X}")
 
    # Test for request for data SRAM dump
    if args.data != "":

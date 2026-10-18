@@ -24,7 +24,7 @@ static std::vector<std::string> split(const std::string& s, char sep) {
 }
 
 static int to_int(const std::string& s) { return (int)strtol(s.c_str(), nullptr, 10); }
-static uint16_t to_hex(const std::string& s) { return (uint16_t)strtoul(s.c_str(), nullptr, 16); }
+static uint32_t to_hex(const std::string& s) { return (uint32_t)strtoul(s.c_str(), nullptr, 16); }
 
 // "<level>_<n>" -> level
 static int level_of(const std::string& s) { return to_int(s); }
@@ -115,8 +115,8 @@ bool Cdb::load(const std::string& path, std::string* err) {
     size_t slash = path.find_last_of('/');
     dir_ = slash == std::string::npos ? "." : path.substr(0, slash);
 
-    std::map<std::string, std::pair<std::string, uint16_t>> ends;   // function end addresses
-    std::vector<std::tuple<char, std::string, std::string, uint16_t>> addrs;  // scope, module/function, name, addr
+    std::map<std::string, std::pair<std::string, uint32_t>> ends;   // function end addresses
+    std::vector<std::tuple<char, std::string, std::string, uint32_t>> addrs;  // scope, module/function, name, addr
     // The records come in assembly order, so a line record follows the
     // address record of its function and precedes that function's end;
     // the last one of a function sits after its last instruction - at the
@@ -133,7 +133,7 @@ bool Cdb::load(const std::string& path, std::string* err) {
         if (kind == 'L') {
             size_t colon = rest.rfind(':');
             if (colon == std::string::npos) continue;
-            uint16_t addr = to_hex(rest.substr(colon + 1));
+            uint32_t addr = to_hex(rest.substr(colon + 1));
             std::string head = rest.substr(0, colon);
             if (head.rfind("C$", 0) == 0) {                   // a source line
                 auto f = split(head.substr(2), '$');
@@ -274,7 +274,7 @@ bool Cdb::load(const std::string& path, std::string* err) {
                        : scope == 'F' ? (!s.is_global && s.module == owner && s.function.empty() && s.name == name)
                                       : (s.function == owner && s.name == name);
             if (match && !s.has_addr) {
-                s.addr = s.space == 'D' ? addr / 4 : s.space == 'C' ? addr / 2 : addr;
+                s.addr = (uint16_t)(s.space == 'D' ? addr / 4 : s.space == 'C' ? addr / 2 : addr);
                 s.has_addr = true;
                 break;
             }
@@ -340,9 +340,9 @@ void Cdb::finish() {
 // The last record at or before addr - of several at one address (a block's
 // opening and its first statement) the last, the statement.  Only within a
 // function that has lines: past the last C line lies assembly code.
-const CdbLine* Cdb::line_at(uint16_t addr) const {
+const CdbLine* Cdb::line_at(CodeAddr addr) const {
     auto it = std::upper_bound(lines_.begin(), lines_.end(), addr,
-                               [](uint16_t a, const CdbLine& l) { return a < l.addr; });
+                               [](CodeAddr a, const CdbLine& l) { return a < l.addr; });
     if (it == lines_.begin()) return nullptr;
     const CdbLine* l = &*(it - 1);
     const CdbFunction* f = function_at(addr);
@@ -350,9 +350,9 @@ const CdbLine* Cdb::line_at(uint16_t addr) const {
     return l;
 }
 
-const CdbLine* Cdb::line_starting(uint16_t addr) const {
+const CdbLine* Cdb::line_starting(CodeAddr addr) const {
     auto it = std::upper_bound(lines_.begin(), lines_.end(), addr,
-                               [](uint16_t a, const CdbLine& l) { return a < l.addr; });
+                               [](CodeAddr a, const CdbLine& l) { return a < l.addr; });
     if (it == lines_.begin() || (it - 1)->addr != addr) return nullptr;
     return &*(it - 1);
 }
@@ -363,8 +363,8 @@ static bool same_file(const std::string& a, const std::string& b) {
     return base(a) == base(b);
 }
 
-std::vector<uint16_t> Cdb::addrs_of_line(const std::string& file, int line) const {
-    std::vector<uint16_t> out;
+std::vector<CodeAddr> Cdb::addrs_of_line(const std::string& file, int line) const {
+    std::vector<CodeAddr> out;
     for (const CdbLine& l : lines_)
         if (l.line == line && same_file(l.file, file) && (out.empty() || out.back() != l.addr))
             out.push_back(l.addr);
@@ -412,10 +412,10 @@ int Cdb::source_lines(const std::string& file) const {
     return 0;
 }
 
-const CdbFunction* Cdb::function_at(uint16_t addr) const {
+const CdbFunction* Cdb::function_at(CodeAddr addr) const {
     // sorted by address, those without one (addr 0, has_addr false) first
     auto it = std::upper_bound(functions_.begin(), functions_.end(), addr,
-                               [](uint16_t a, const CdbFunction& f) { return a < f.addr; });
+                               [](CodeAddr a, const CdbFunction& f) { return a < f.addr; });
     while (it != functions_.begin()) {
         --it;
         if (!it->has_addr) return nullptr;
@@ -492,7 +492,7 @@ static std::string hex4(uint16_t v) { char b[8]; snprintf(b, sizeof b, "0x%04x",
 static int read_byte(uint16_t addr, bool in_code, const Cdb::ReadData& rd, const Cdb::ReadCode& rdcode) {
     if (in_code) {
         if (!rdcode) return -1;
-        return rdcode((uint16_t)((2u * (addr & 0x7fffu)) & 0x7fffu)) & 0xff;
+        return rdcode((CodeAddr)((2u * (addr & 0x7fffu)) & 0x7fffu)) & 0xff;
     }
     if (!rd) return -1;
     return rd(addr);
@@ -792,11 +792,11 @@ std::string Cdb::format_value(const Value& v, const ReadData& rd, const ReadData
 
 static int sext10(uint16_t v) { return (v & 0x200) ? (int)(v & 0x3ff) - 0x400 : (int)(v & 0x3ff); }
 
-Cdb::Prologue Cdb::prologue(const CdbFunction& f, uint16_t pc, const ReadCode& rdcode) const {
+Cdb::Prologue Cdb::prologue(const CdbFunction& f, CodeAddr pc, const ReadCode& rdcode) const {
     Prologue p;
     p.end = f.addr;
     if (!rdcode || !f.has_addr) return p;
-    uint16_t a = f.addr;
+    CodeAddr a = f.addr;
     for (int i = 0; i < 8; i++, a++) {                  // sra, then the ads of the locals (two for a big frame)
         uint16_t inst = rdcode(a);
         bool is_sra = (inst & 0xfffc) == 0xa160;
@@ -817,37 +817,64 @@ int Cdb::arg_bytes(const CdbFunction& f) const {
     return n + return_slot(f);
 }
 
-std::vector<Cdb::StackFrame> Cdb::unwind(uint16_t pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max) const {
+bool Cdb::is_bcall_return(CodeAddr ret, const ReadCode& rdcode) {
+    if (!rdcode || ret == 0) return false;
+    uint16_t call = rdcode(ret - 1), restore = rdcode(ret + 2);
+    return (call >> 5) == 0x454 && restore == 0xFE15;    // call ix ... sta [p:0x15]
+}
+
+std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max, unsigned code_bank) const {
     std::vector<StackFrame> out;
     const CdbFunction* f = function_at(pc);
-    uint16_t cur_pc = pc, cur_sp = sp;
+    CodeAddr cur_pc = pc;
+    uint16_t cur_sp = sp;
+    unsigned bank = bank_of(pc, code_bank);          // the code bank the frame runs under
     for (int depth = 0; f && depth < max; depth++) {
-        Prologue p = prologue(*f, depth == 0 ? cur_pc : (uint16_t)(f->end ? f->end : 0x7fff), rdcode);
+        Prologue p = prologue(*f, depth == 0 ? cur_pc : (f->end ? f->end : (CodeAddr) 0xFFFFFFFF), rdcode);
         StackFrame fr;
         fr.pc = cur_pc;
         fr.function = f;
         fr.entry_sp = (uint16_t)((cur_sp + p.displacement) & 0x7fff);
         fr.ra_saved = p.ra_saved;
+        uint16_t ret;                                     // a window address
         if (p.ra_saved) {
             if (!rd) break;
             // the sra at entry: RA's low byte on top of the stack, the high
             // byte (with ra_cond) below it
             uint16_t lo = (uint16_t)((fr.entry_sp + sp_top_ - 1) & 0x7fff);
-            fr.ret_pc = (uint16_t)(rd(lo) | ((rd((uint16_t)((lo - 1) & 0x7fff)) & 0x7f) << 8));
+            ret = (uint16_t)(rd(lo) | ((rd((uint16_t)((lo - 1) & 0x7fff)) & 0x7f) << 8));
         } else if (depth == 0) {
-            fr.ret_pc = ra & 0x7fff;
+            ret = ra & 0x7fff;
         } else {
             fr.ret_pc = 0;                               // a caller that never saved RA: the walk ends
             out.push_back(fr);
             break;
         }
+        fr.ret_pc = phys(ret, bank);
+        int args = arg_bytes(*f);
+        if (rd && is_bcall_return(fr.ret_pc, rdcode)) {
+            // through ___sdcc_bcall: at the callee's entry the trampoline's
+            // sra left the caller's RA on top (high byte first) and the
+            // caller's bank above it; the caller's stack arguments lie above
+            // those three bytes (their offsets include them: SDCC's
+            // banked_overhead), the caller's SP at its call is past the
+            // bank byte it pushed
+            uint16_t hi = (uint16_t)((fr.entry_sp + sp_top_) & 0x7fff);
+            ret = (uint16_t)((rd(hi) & 0x7f) << 8 | rd((uint16_t)((hi + 1) & 0x7fff)));
+            bank = rd((uint16_t)((hi + 2) & 0x7fff)) & 15;
+            fr.ret_pc = phys(ret, bank);
+            fr.via_bcall = true;
+            int n = args - return_slot(*f);
+            args = (n > 0 ? n : 3) + return_slot(*f);
+        }
         out.push_back(fr);
-        const CdbFunction* caller = function_at((uint16_t)(fr.ret_pc - 1));
+        const CdbFunction* caller = fr.ret_pc ? function_at(fr.ret_pc - 1) : nullptr;
         if (!caller || fr.ret_pc == 0) break;
-        uint16_t caller_sp = (uint16_t)((fr.entry_sp + arg_bytes(*f)) & 0x7fff);
+        uint16_t caller_sp = (uint16_t)((fr.entry_sp + args) & 0x7fff);
         if (caller_sp <= cur_sp && depth > 0) break;     // the stack must grow back up
         cur_pc = fr.ret_pc;
         cur_sp = caller_sp;
+        bank = bank_of(cur_pc, bank);
         f = caller;
     }
     return out;
@@ -883,11 +910,11 @@ int Cdb::sp_effect(uint16_t op) {
     return 0;
 }
 
-uint16_t Cdb::safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool* ok) {
+CodeAddr Cdb::safe_stop(CodeAddr x, const ReadCode& rdcode, int* sp_delta, bool* ok) {
     int delta = 0;
-    uint16_t a = x & 0x7fff;
+    CodeAddr a = x;
     if (ok) *ok = true;
-    for (int i = 0; i < 16 && is_store(rdcode((uint16_t)((a - 1) & 0x7fff))); i++) {
+    for (int i = 0; i < 16 && a > 0 && is_store(rdcode(a - 1)); i++) {
         // run the instruction at a, stop after it - unless it transfers control
         uint16_t op = rdcode(a);
         uint16_t t5 = op >> 11, t6 = op >> 10, t9 = op >> 7, t10 = op >> 6, t11 = op >> 5;
@@ -897,10 +924,10 @@ uint16_t Cdb::safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool*
         if (transfer) {
             if (ok) *ok = false;
             if (sp_delta) *sp_delta = 0;
-            return x & 0x7fff;
+            return x;
         }
         delta += sp_effect(op);
-        a = (a + 1) & 0x7fff;
+        a = a + 1;
     }
     if (sp_delta) *sp_delta = delta;
     return a;
@@ -908,58 +935,82 @@ uint16_t Cdb::safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool*
 
 // ---- where a line is left ----------------------------------------------
 
-uint16_t Cdb::first_line_addr(const CdbFunction& f) const {
+CodeAddr Cdb::first_line_addr(const CdbFunction& f) const {
     if (!f.has_addr) return 0;
     for (const CdbLine& l : lines_)
         if (l.addr >= f.addr && (!f.has_end || l.addr < f.end)) return l.addr;
     return 0;
 }
 
-Cdb::Exits Cdb::line_exits(uint16_t pc, bool into, uint16_t ret_pc, const ReadCode& rdcode) const {
+Cdb::Exits Cdb::line_exits(CodeAddr pc, bool into, CodeAddr ret_pc, const ReadCode& rdcode) const {
     Exits ex;
-    std::set<uint16_t> stops, seen;
-    std::vector<uint16_t> todo{pc};
+    std::set<CodeAddr> stops, seen;
+    std::vector<CodeAddr> todo{pc};
     const CdbLine* l0 = line_at(pc);
-    auto stop_at = [&](uint16_t a) { stops.insert(a); };
+    auto stop_at = [&](CodeAddr a) { stops.insert(a); };
     // a successor: a line start stops there (pc's own line again means a
     // loop back), anything else is scanned on
-    auto succ = [&](uint16_t a) {
-        a &= 0x7fff;
+    auto succ = [&](CodeAddr a) {
         if (a == pc) { stop_at(a); return; }
         const CdbLine* l = line_starting(a);
         if (l && (!l0 || l->line != l0->line || l->file != l0->file || a < pc)) { stop_at(a); return; }
         if (!seen.count(a)) todo.push_back(a);
     };
+    // a call of the function at physical t: into it, or on after the return
+    auto call = [&](CodeAddr t, CodeAddr seq) {
+        const CdbFunction* callee = into ? function_at(t) : nullptr;
+        CodeAddr first = callee && callee->addr == t ? first_line_addr(*callee) : 0;
+        if (first) stop_at(first);
+        succ(seq);
+    };
+    // pc-relative targets stay inside the 16K half (the bank) the code is in
+    auto rel_to = [](CodeAddr a, int rel) { return (a & ~(CodeAddr)0x3fff) | ((a + rel) & 0x3fff); };
     while (!todo.empty()) {
-        uint16_t a = todo.back();
+        CodeAddr a = todo.back();
         todo.pop_back();
         if (seen.count(a)) continue;
         seen.insert(a);
         if (seen.size() > 4000) { ex.unknown = true; break; }
         uint16_t op = rdcode(a);
-        uint16_t seq = (a + 1) & 0x7fff;
+        CodeAddr seq = a + 1;
         int rel = ((int)(op & 0x7ff) << 21) >> 21;        // sign-extended inst[10:0]
         if (!(op & 0x8000)) {                                // jal
-            const CdbFunction* callee = into ? function_at(op & 0x7fff) : nullptr;
-            uint16_t first = callee && callee->addr == (op & 0x7fff) ? first_line_addr(*callee) : 0;
-            if (first) stop_at(first);
-            succ(seq);                                       // after the return
+            // a banked call: ldx #f (two words) right before jal ___sdcc_bcall
+            if (a >= 2 && (rdcode(a - 2) >> 4) == 0xa18) {
+                CodeAddr tramp = follow(op & 0x7fff, a);
+                // ___sdcc_bcall: sra, push a, ldax, swapi, stax, pop a, call ix
+                bool is_bcall = (rdcode(tramp) & 0xfffc) == 0xa160 && (rdcode(tramp + 6) >> 5) == 0x454 && rdcode(tramp + 9) == 0xFE15;
+                if (is_bcall) {
+                    // the bank byte was pushed before: `ldi #b; ...; push a`
+                    // or swapped under A - find the ldi in the few words before
+                    uint16_t target = rdcode(a - 1) & 0x7fff;
+                    int bank = -1;
+                    for (CodeAddr b = a - 2; b + 8 > a && b > 0; b--) {
+                        uint16_t w = rdcode(b - 1);
+                        if ((w >> 10) == 0x20) { bank = w & 15; break; }   // ldi #imm8
+                    }
+                    if (bank >= 0) call(phys(target, (unsigned)bank), seq);
+                    else succ(seq);
+                    continue;
+                }
+            }
+            call(follow(op & 0x7fff, a), seq);
             continue;
         }
         uint16_t t5 = op >> 11, t6 = op >> 10, t9 = op >> 7, t10 = op >> 6, t11 = op >> 5;
-        if (t5 == 0x16) { succ((uint16_t)(a + rel)); continue; }                    // br
-        if (t5 == 0x15 || t5 == 0x17) { succ((uint16_t)(a + rel)); succ(seq); continue; }   // bnz / bz
+        if (t5 == 0x16) { succ(rel_to(a, rel)); continue; }                         // br
+        if (t5 == 0x15 || t5 == 0x17) { succ(rel_to(a, rel)); succ(seq); continue; }   // bnz / bz
         if (t6 == 0x23 || t9 == 0x114) { if (ret_pc) stop_at(ret_pc); else ex.unknown = true; continue; }   // ret #k / ret
         if (t10 == 0x22c || t10 == 0x22e) { if (ret_pc) stop_at(ret_pc); else ex.unknown = true; succ(seq); continue; }   // rc / rz
         if (t10 == 0x22d) { ex.unknown = true; continue; }                           // rets
         if (t11 == 0x454) { succ(seq); continue; }                                   // call ix: back at the next word
         if (t11 == 0x455) { ex.unknown = true; continue; }                           // jmp ix
-        if ((op >> 4) == 0xa18) { succ((uint16_t)(a + 2)); continue; }               // ldx: the next word is its operand
+        if ((op >> 4) == 0xa18) { succ(a + 2); continue; }                           // ldx: the next word is its operand
         if ((op >> 8) == 0xa2) {                                                     // if / iftt / ifte: a skipped slot falls through
             int type = (op >> 3) & 3;
-            if (type == 0 || type == 3) succ((uint16_t)(a + 2));
-            else if (type == 1) succ((uint16_t)(a + 3));
-            else { succ((uint16_t)(a + 2)); succ((uint16_t)(a + 3)); }
+            if (type == 0 || type == 3) succ(a + 2);
+            else if (type == 1) succ(a + 3);
+            else { succ(a + 2); succ(a + 3); }
         }
         succ(seq);
     }

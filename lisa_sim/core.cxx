@@ -36,21 +36,21 @@ void LisaCore::reset() {
     cycle_count_ = 0;
     inst_count_ = 0;
     last_inst_ = 0;
-    bp_skip_pc_ = 0xFFFF;
+    bp_skip_pc_ = 0xFFFFFFFF;
     calls_.clear();
 }
 
 // --- Shadow call stack ---
 
 void LisaCore::call_push(uint16_t ret_pc, bool isr) {
-    calls_.push_back({ret_pc, sp_, isr});
+    calls_.push_back({code_pa(ret_pc), sp_, isr});
     if (calls_.size() > 512)            // runaway: keep the recent half
         calls_.erase(calls_.begin(), calls_.begin() + 256);
 }
 
 void LisaCore::call_return(uint16_t pc, bool isr) {
     for (size_t i = calls_.size(); i-- > 0; ) {
-        if (calls_[i].isr == isr && (isr || calls_[i].ret_pc == pc)) {
+        if (calls_[i].isr == isr && (isr || calls_[i].ret_pc == code_pa(pc))) {
             calls_.resize(i);
             return;
         }
@@ -204,10 +204,10 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
 void LisaCore::set_interrupt(uint8_t mask) { int_pending_ |= mask; }
 void LisaCore::clear_interrupt(uint8_t mask) { int_pending_ &= ~mask; }
 
-bool LisaCore::add_breakpoint(uint16_t addr) {
+bool LisaCore::add_breakpoint(uint32_t addr) {
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
         if (!bp_active_[i]) {
-            breakpoints_[i] = addr & PC_MASK;
+            breakpoints_[i] = addr;
             bp_active_[i] = true;
             return true;
         }
@@ -215,9 +215,9 @@ bool LisaCore::add_breakpoint(uint16_t addr) {
     return false;
 }
 
-bool LisaCore::remove_breakpoint(uint16_t addr) {
+bool LisaCore::remove_breakpoint(uint32_t addr) {
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
-        if (bp_active_[i] && breakpoints_[i] == (addr & PC_MASK)) {
+        if (bp_active_[i] && breakpoints_[i] == addr) {
             bp_active_[i] = false;
             return true;
         }
@@ -229,15 +229,15 @@ void LisaCore::clear_breakpoints() {
     for (int i = 0; i < MAX_BREAKPOINTS; i++) bp_active_[i] = false;
 }
 
-bool LisaCore::is_breakpoint(uint16_t addr) const {
+bool LisaCore::is_breakpoint(uint32_t addr) const {
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
-        if (bp_active_[i] && breakpoints_[i] == (addr & PC_MASK))
+        if (bp_active_[i] && breakpoints_[i] == addr)
             return true;
     }
     return false;
 }
 
-int LisaCore::get_breakpoints(uint16_t* addrs, int max) const {
+int LisaCore::get_breakpoints(uint32_t* addrs, int max) const {
     int n = 0;
     for (int i = 0; i < MAX_BREAKPOINTS && n < max; i++) {
         if (bp_active_[i])
@@ -314,11 +314,11 @@ int LisaCore::step_inst() {
     if (halted_) return 1;
 
     // Check breakpoint (not the one resumed from)
-    if (is_breakpoint(pc_) && pc_ != bp_skip_pc_) {
+    if (is_breakpoint(code_pa(pc_)) && code_pa(pc_) != bp_skip_pc_) {
         halted_ = true;
         return 1;
     }
-    bp_skip_pc_ = 0xFFFF;
+    bp_skip_pc_ = 0xFFFFFFFF;
 
     // Fetch instruction
     uint16_t inst = mem_ ? mem_->inst_read(code_pa(pc_)) : 0;

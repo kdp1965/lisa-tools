@@ -132,6 +132,7 @@ CLisa::CLisa(CTui *pTui)
     m_noSyntaxHilight = 0;
     m_WorkingDir      = ".";
     m_PrefsFile       = ".tui_prefs";
+    m_LastCodeBank    = 1;
     m_Rev2            = false;              // TT07 until `rev2 on` (kept in .tui_prefs)
     m_pAttachedSrc    = NULL;
     m_Running         = -1;
@@ -151,7 +152,10 @@ CLisa::CLisa(CTui *pTui)
     m_SetupField      = 0;
     m_SetupFresh      = true;
     for (x = 0; x < 4; x++)
+    {
         m_Breakpoints[x] = 0;
+        m_BreakBank[x] = 1;
+    }
 
     // Initialze the search paths
     for (x = 0; x < LISA_MAX_PATHS; x++)
@@ -1574,7 +1578,7 @@ int CLisa::Run(int argc, char* argv[])
     // its output; until a breakpoint, a brk or Ctrl-C.  Off a breakpoint at
     // the PC by one instruction first.
     Printf("running: Ctrl-C halts");
-    int pc = RunToStops(std::vector<uint16_t>(), 0x7fffffff);
+    long pc = RunToStops(std::vector<lisa::CodeAddr>(), 0x7fffffff);
     if (pc < 0)
         Printf("the core did not halt");
     if (m_pAttachedSrc)
@@ -1706,6 +1710,7 @@ int CLisa::Delete(int argc, char* argv[])
         {
             WriteReg(8 + x, 0);
             m_Breakpoints[x] = 0;
+            m_BreakBank[x] = 1;
             usleep(2000);
         }
     }
@@ -1716,6 +1721,7 @@ int CLisa::Delete(int argc, char* argv[])
         {
             WriteReg(8 + x, 0);
             m_Breakpoints[x] = 0;
+            m_BreakBank[x] = 1;
         }
     }
     m_pParent->DrawSourceWindow();
@@ -1747,12 +1753,15 @@ int CLisa::Break(int argc, char* argv[])
                 // Test if breakpoint enabled
                 if (regVal & 0x8000)
                 {
-                    const lisa::CdbLine *l = m_Cdb.loaded() ? m_Cdb.line_at(regVal & 0x7fff) : NULL;
+                    // the hardware compares the window address; the bank
+                    // the breakpoint was set for says which code it means
+                    lisa::CodeAddr a = lisa::Cdb::phys(regVal & 0x7fff, m_BreakBank[x]);
+                    const lisa::CdbLine *l = m_Cdb.loaded() ? m_Cdb.line_at(a) : NULL;
                     if (l)
-                        Printf("%d: 0x%04x  %s:%d in %s()", x, (uint16_t) (regVal & 0x7fff), l->file.c_str(), l->line,
-                               m_Cdb.function_at(regVal & 0x7fff)->name.c_str());
+                        Printf("%d: %s  %s:%d in %s()", x, CAddr(a).c_str(), l->file.c_str(), l->line,
+                               m_Cdb.function_at(a)->name.c_str());
                     else
-                        Printf("%d: 0x%04x", x, (uint16_t) (regVal & 0x7fff));
+                        Printf("%d: %s", x, CAddr(a).c_str());
                 }
             }
         }
@@ -1760,18 +1769,18 @@ int CLisa::Break(int argc, char* argv[])
     else
     {
         // file:line, a line, a function, *addr (an address when there is no .cdb)
-        uint16_t    addr;
+        lisa::CodeAddr addr;
         std::string what;
 
         if (!ResolveLocation(argv[1], addr, what))
             return 1;
         // not right after a store: on TT07 a breakpoint halt there loses
         // the store and overwrites RAM[IX] (Cdb::is_store)
-        uint16_t safe = SafeStop(addr);
+        lisa::CodeAddr safe = SafeStop(addr);
         if (safe != addr)
         {
-            Printf("(0x%04x follows a store, which a TT07 breakpoint would lose: planted at 0x%04x, reported as 0x%04x)",
-                   addr, safe, addr);
+            Printf("(%s follows a store, which a TT07 breakpoint would lose: planted at %s, reported as %s)",
+                   CAddr(addr).c_str(), CAddr(safe).c_str(), CAddr(addr).c_str());
             addr = safe;
         }
 
@@ -1783,10 +1792,14 @@ int CLisa::Break(int argc, char* argv[])
                 // Test if breakpoint enabled
                 if ((regVal & 0x8000) == 0)
                 {
-                    regVal = addr | 0x8000;
+                    // the hardware breakpoint holds the window address; a
+                    // halt there in another code bank is passed over
+                    // (RunToStops / StrayBankHalt)
+                    regVal = lisa::Cdb::window(addr) | 0x8000;
                     WriteReg(8 + x, regVal);
                     m_Breakpoints[x] = regVal;
-                    Printf("breakpoint %d at 0x%04x%s%s", x, addr, what.empty() ? "" : ": ", what.c_str());
+                    m_BreakBank[x] = addr >= 0x4000 ? (unsigned) (addr >> 14) : 1;
+                    Printf("breakpoint %d at %s%s%s", x, CAddr(addr).c_str(), what.empty() ? "" : ": ", what.c_str());
                     break;
                 }
             }
@@ -2045,7 +2058,11 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  Without an argument lists the 4 hardware breakpoints. A bare line is in the\n"
                 "  active tab's file; a function stops at its first line. An address right\n"
                 "  after a store is moved past it (on TT07 a halt there loses the store and\n"
-                "  overwrites RAM[IX]); the stop is still reported as the line you gave."},
+                "  overwrites RAM[IX]); the stop is still reported as the line you gave.\n"
+                "  The second chip's code banks: a location in a bank is shown bank:0xaddr and\n"
+                "  *bank:addr sets one; a plain *addr is in the code bank switched in. The\n"
+                "  hardware compares the window address, so a halt there in another bank is\n"
+                "  passed over (the run goes on)."},
     {"run",     "run\n"
                 "  Runs until a breakpoint, a brk or Ctrl-C (like gdb's continue). The program\n"
                 "  has the UART meanwhile; what it prints appears as [LISA] ... lines."},

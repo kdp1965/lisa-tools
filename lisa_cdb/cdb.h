@@ -26,8 +26,15 @@
 // to SP depends on the chip (sp_top: 1 on TT07, 0 on the second chip).
 //
 // The file's addresses are the linker's bytes; this reader converts them
-// as it loads: a line's or function's address is the word the PC holds,
-// a code-space constant's (space D) is the pointer value without its tag
+// as it loads: a line's or function's address is the word the PC holds -
+// a physical one (CodeAddr): on the second chip the upper half of the code
+// space, PC 0x4000 up, is a window on one of 16 code banks (ttsky26d
+// RESPIN 22), and code linked in bank n (sdcc's #pragma bank, area BANKn at
+// byte n * 0x8000) is at physical word {n, PC[13:0]} = n * 0x4000 + (PC &
+// 0x3fff); below 0x4000 the two are the same.  Every code address in and
+// out of this class is physical: a debugger converts the PC with the code
+// bank (Cdb::phys) and a window address back with Cdb::window.
+// Otherwise: // a code-space constant's (space D) is the pointer value without its tag
 // (its bytes are ldi/ret pairs at twice that word), data addresses stay.
 #pragma once
 #include <cstdint>
@@ -37,6 +44,8 @@
 #include <vector>
 
 namespace lisa {
+
+using CodeAddr = uint32_t;             // a physical code word (see above)
 
 struct CdbType {
     int size = 0;                       // bytes
@@ -72,14 +81,15 @@ struct CdbFunction {
     bool is_global = false;
     int level = 0, block = 0;
     CdbType type;
-    uint16_t addr = 0, end = 0;
+    CodeAddr addr = 0, end = 0;
     bool has_addr = false, has_end = false;
+    bool banked() const { return type.size == 3; }   // __banked: called through ___sdcc_bcall
 };
 
 struct CdbLine {
     std::string file;
     int line = 0, level = 0, block = 0;
-    uint16_t addr = 0;
+    CodeAddr addr = 0;
 };
 
 struct CdbStruct {
@@ -95,10 +105,18 @@ public:
     const std::string& path() const { return path_; }
     const std::string& dir() const { return dir_; }   // where the sources are looked for
 
+    // the code banks: a window address (a PC, RA, a jal target) as a
+    // physical word under code bank `bank`, and back
+    static CodeAddr phys(uint16_t pc, unsigned bank) { pc &= 0x7fff; return pc < 0x4000 ? pc : ((CodeAddr)(bank & 15) << 14) | (pc & 0x3fff); }
+    static uint16_t window(CodeAddr a) { return a < 0x4000 ? (uint16_t)a : (uint16_t)(0x4000 | (a & 0x3fff)); }
+    static unsigned bank_of(CodeAddr a, unsigned dflt) { return a < 0x4000 ? dflt : (unsigned)(a >> 14); }
+    // where a transfer to window address t made from physical `from` lands: the same bank
+    static CodeAddr follow(uint16_t t, CodeAddr from) { return phys(t, bank_of(from, 1)); }
+
     // lines
-    const CdbLine* line_at(uint16_t addr) const;      // the line whose code covers addr
-    const CdbLine* line_starting(uint16_t addr) const; // a line that starts exactly at addr
-    std::vector<uint16_t> addrs_of_line(const std::string& file, int line) const;
+    const CdbLine* line_at(CodeAddr addr) const;      // the line whose code covers addr
+    const CdbLine* line_starting(CodeAddr addr) const; // a line that starts exactly at addr
+    std::vector<CodeAddr> addrs_of_line(const std::string& file, int line) const;
     const CdbLine* next_line_with_code(const std::string& file, int line) const;
     const std::vector<CdbLine>& lines() const { return lines_; }
     std::vector<std::string> files() const;
@@ -108,7 +126,7 @@ public:
     std::string source_path(const std::string& file) const;   // where it was found, "" if not
 
     // functions and symbols
-    const CdbFunction* function_at(uint16_t addr) const;
+    const CdbFunction* function_at(CodeAddr addr) const;
     const CdbFunction* function(const std::string& name) const;   // "main" or "module.main"
     std::vector<const CdbSymbol*> locals(const std::string& function) const;
     const CdbSymbol* global(const std::string& name) const;        // globals and file statics
@@ -133,7 +151,7 @@ public:
     // (the ldi/ret pairs of a code pointer) through rdcode (the instruction
     // word at an address), both optional
     using ReadData = std::function<uint8_t(uint16_t)>;
-    using ReadCode = std::function<uint16_t(uint16_t)>;
+    using ReadCode = std::function<uint16_t(CodeAddr)>;   // the instruction word at a physical address
     std::string format(const CdbType& t, uint16_t addr, bool in_code, const ReadData& rd, const ReadCode& rdcode, int depth = 0) const;
     int type_size(const CdbType& t) const;              // a struct's from its members
 
@@ -170,8 +188,8 @@ public:
     // What a function's prologue has done to SP by the time pc is reached:
     // `sra` (2 bytes, RA saved) and `ads #-n` (its locals) are the whole of
     // it, so at a statement boundary SP = entry SP - displacement.
-    struct Prologue { bool ra_saved = false; int displacement = 0; uint16_t end = 0; };
-    Prologue prologue(const CdbFunction& f, uint16_t pc, const ReadCode& rdcode) const;
+    struct Prologue { bool ra_saved = false; int displacement = 0; CodeAddr end = 0; };
+    Prologue prologue(const CdbFunction& f, CodeAddr pc, const ReadCode& rdcode) const;
     // the bytes a caller pushes for f: its stack arguments and the result
     // slot (popped after the call)
     int arg_bytes(const CdbFunction& f) const;
@@ -179,14 +197,23 @@ public:
     // function saves it (low byte at the entry SP, high byte below), the
     // caller's SP at its statement boundary is the callee's entry SP plus
     // the arguments.  Stops at code without a function.
+    // A __banked function is entered from ___sdcc_bcall: its return
+    // address is in the trampoline, which keeps the caller's RA and code
+    // bank on the stack (lisa_isa.md "Bank registers"); the walk goes
+    // through it to the caller, in the caller's bank.  code_bank: the bank
+    // register at the halt (the bank of a window PC).
     struct StackFrame {
-        uint16_t pc;                    // frame 0: the PC; others: the return address into them
+        CodeAddr pc;                    // frame 0: the PC; others: the return address into them
         const CdbFunction* function;
         uint16_t entry_sp;
         bool ra_saved;
-        uint16_t ret_pc;                // where this frame returns to
+        CodeAddr ret_pc;                // where this frame returns to (past a trampoline: into the caller)
+        bool via_bcall = false;         // ... through ___sdcc_bcall
     };
-    std::vector<StackFrame> unwind(uint16_t pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max = 32) const;
+    std::vector<StackFrame> unwind(CodeAddr pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max = 32, unsigned code_bank = 1) const;
+    // ret is the word after a `call ix` in ___sdcc_bcall (its signature: the
+    // bank restored two words on, sta [p:0x15])
+    static bool is_bcall_return(CodeAddr ret, const ReadCode& rdcode);
 
     // Where execution leaves the source line at pc, for a `next` that runs
     // to breakpoints instead of stepping: the line starts reachable from pc
@@ -195,10 +222,12 @@ public:
     // of a callee that has lines - and ret_pc for a return out of the
     // function (0 if unknown).  `unknown` is set when a jmp ix or an
     // overlong scan leaves a path unaccounted for.
-    struct Exits { std::vector<uint16_t> stops; bool unknown = false; };
-    Exits line_exits(uint16_t pc, bool into, uint16_t ret_pc, const ReadCode& rdcode) const;
+    // A call through ___sdcc_bcall (`ldx #f; jal ___sdcc_bcall`) counts as a
+    // call of f.
+    struct Exits { std::vector<CodeAddr> stops; bool unknown = false; };
+    Exits line_exits(CodeAddr pc, bool into, CodeAddr ret_pc, const ReadCode& rdcode) const;
     // the first line of a function past its prologue, 0 if it has none
-    uint16_t first_line_addr(const CdbFunction& f) const;
+    CodeAddr first_line_addr(const CdbFunction& f) const;
 
     // ---- the TT07 breakpoint hazard ----
     // A store's RAM write completes in the fetch cycle after its
@@ -215,7 +244,7 @@ public:
     // one.  *sp_delta is the SP change of the instructions run past to get
     // there (SP at x = SP there - *sp_delta).  If a branch, call or return
     // comes first the walk cannot go on: x is returned and *ok cleared.
-    static uint16_t safe_stop(uint16_t x, const ReadCode& rdcode, int* sp_delta, bool* ok = nullptr);
+    static CodeAddr safe_stop(CodeAddr x, const ReadCode& rdcode, int* sp_delta, bool* ok = nullptr);
 
 private:
     bool loaded_ = false;

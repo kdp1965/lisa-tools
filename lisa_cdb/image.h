@@ -2,6 +2,7 @@
 // Intel HEX (sdcc -mlisa: byte addresses, little-endian words), the
 // cocotb firmware.hex form (@addr then hex bytes) or one 4-digit hex
 // opcode per line (the bring-up demos).  Shared by lisa_ide and lisa_sim.
+// A word's index is its physical code address (the code banks: cdb.h).
 #pragma once
 #include <cstdint>
 #include <string>
