@@ -53,6 +53,14 @@ public:
     void set_div(LisaDiv* div) { div_ = div; }
     void set_icache(InstCache* c) { icache_ = c; }   // the instruction cache model (icache.h)
 
+    // The banks (the second chip, RESPIN 22): the upper 16K of each space is
+    // a window on one of 16 banks - the code bank for a fetch, the stack bank
+    // for an SP-relative data access, the data bank for an IX-relative or
+    // debugger one (lisa_periph registers 0x15-0x17, reset 1 = TT07's layout).
+    // The 18-bit physical address of a 15-bit one; below 0x4000 bank 0
+    uint32_t code_pa(uint16_t pc) const;
+    uint32_t data_pa(uint16_t addr, bool sp_rel) const;
+
     // Execute one full instruction (returns number of cycles taken)
     int step();
     int step_inst();   // one instruction, no interrupt check
@@ -171,8 +179,8 @@ private:
     TraceCallback     trace_cb_;
 
     // Internal helpers
-    uint8_t  data_read(uint16_t addr, bool periph);
-    void     data_write(uint16_t addr, uint8_t val, bool periph);
+    uint8_t  data_read(uint16_t addr, bool periph, bool sp_rel = false);
+    void     data_write(uint16_t addr, uint8_t val, bool periph, bool sp_rel = false);
     void     update_flags_zc(uint8_t result, bool carry);
     void     update_flag_z(uint8_t result);
     bool     eval_condition(uint8_t cc, bool s) const;

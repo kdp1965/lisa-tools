@@ -37,6 +37,11 @@ namespace PeriphReg {
     constexpr uint8_t UART2_STATUS    = 0x13;
     constexpr uint8_t UART_INT_EN     = 0x14;
 
+    // The banks (the second chip, RESPIN 22): 4 bits each, reset 1
+    constexpr uint8_t BANK_CODE       = 0x15;  // fetches above word 0x4000
+    constexpr uint8_t BANK_DATA       = 0x16;  // IX-relative and debugger accesses above 0x4000
+    constexpr uint8_t BANK_STACK      = 0x17;  // SP-relative accesses above 0x4000
+
     // Timer 2
     constexpr uint8_t TIM2_PREDIV_LO  = 0x18;
     constexpr uint8_t TIM2_PREDIV_HI  = 0x19;
@@ -79,6 +84,13 @@ class LisaPeripherals {
 public:
     LisaPeripherals();
     void reset();
+
+    // The bank registers exist on the second chip only (--rev2); the core's
+    // code_pa / data_pa read them
+    void set_rev2(bool on) { rev2_ = on; }
+    uint8_t code_bank() const { return code_bank_; }
+    uint8_t data_bank() const { return data_bank_; }
+    uint8_t stack_bank() const { return stack_bank_; }
 
     // Register read/write (called by core when d_periph is set)
     uint8_t read(uint8_t addr);
@@ -124,6 +136,8 @@ private:
     uint8_t int_enable_;
     uint8_t int_status_;
     uint8_t uart_int_en_;
+    bool    rev2_ = false;
+    uint8_t code_bank_ = 1, data_bank_ = 1, stack_bank_ = 1;
 
     // I2C (simplified)
     uint16_t i2c_prescale_;

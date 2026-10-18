@@ -25,6 +25,7 @@ void LisaPeripherals::reset() {
     int_enable_ = 0;
     int_status_ = 0;
     uart_int_en_ = 0;
+    code_bank_ = data_bank_ = stack_bank_ = 1;
 
     i2c_prescale_ = 0;
     i2c_ctrl_ = 0;
@@ -98,6 +99,11 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
     case PeriphReg::I2C_TX_DATA:     return i2c_tx_data_;
     case PeriphReg::I2C_CMD:         return i2c_cmd_;
 
+    // the banks: nothing there on TT07
+    case PeriphReg::BANK_CODE:       return rev2_ ? code_bank_ : 0;
+    case PeriphReg::BANK_DATA:       return rev2_ ? data_bank_ : 0;
+    case PeriphReg::BANK_STACK:      return rev2_ ? stack_bank_ : 0;
+
     default:
         return 0;
     }
@@ -112,6 +118,9 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
     case PeriphReg::PORT_E_OUT:      port_e_out_ = val; break;
     case PeriphReg::PORT_A_INT_CFG0: port_a_int_cfg0_ = val; break;
     case PeriphReg::PORT_A_INT_CFG1: port_a_int_cfg1_ = val; break;
+    case PeriphReg::BANK_CODE:       if (rev2_) code_bank_  = val & 0x0F; break;
+    case PeriphReg::BANK_DATA:       if (rev2_) data_bank_  = val & 0x0F; break;
+    case PeriphReg::BANK_STACK:      if (rev2_) stack_bank_ = val & 0x0F; break;
 
     // Timer 1
     case PeriphReg::TIM1_PREDIV_LO:

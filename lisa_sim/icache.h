@@ -57,7 +57,7 @@ public:
     void reset();                                   // invalidate, zero the counters
     bool enabled() const { return on_; }
 
-    void fetch(uint16_t pc);                                    // the core reads the instruction word at pc
+    void fetch(uint32_t pc);                                    // the core reads the instruction word at pc
     void retire(uint16_t pc, uint16_t pc_next, int sim_cycles); // ... and has executed it; pc_next follows
 
     uint64_t fetches()      const { return fetches_; }

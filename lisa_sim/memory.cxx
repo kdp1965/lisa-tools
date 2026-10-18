@@ -1,5 +1,6 @@
 #include "memory.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -7,29 +8,29 @@
 #include <sstream>
 #include <vector>
 
-LisaMemory::LisaMemory() : fw_words_(0) {
+LisaMemory::LisaMemory() : inst_(INST_SIZE), data_(DATA_SIZE), fw_words_(0) {
     reset();
 }
 
 void LisaMemory::reset() {
-    std::memset(inst_, 0, sizeof(inst_));
-    std::memset(data_, 0, sizeof(data_));
+    std::fill(inst_.begin(), inst_.end(), 0);
+    std::fill(data_.begin(), data_.end(), 0);
     fw_words_ = 0;
 }
 
-uint16_t LisaMemory::inst_read(uint16_t addr) const {
+uint16_t LisaMemory::inst_read(uint32_t addr) const {
     return inst_[addr & (INST_SIZE - 1)];
 }
 
-void LisaMemory::inst_write(uint16_t addr, uint16_t data) {
+void LisaMemory::inst_write(uint32_t addr, uint16_t data) {
     inst_[addr & (INST_SIZE - 1)] = data;
 }
 
-uint8_t LisaMemory::data_read(uint16_t addr) const {
+uint8_t LisaMemory::data_read(uint32_t addr) const {
     return data_[addr & data_mask_];
 }
 
-void LisaMemory::data_write(uint16_t addr, uint8_t data) {
+void LisaMemory::data_write(uint32_t addr, uint8_t data) {
     data_[addr & data_mask_] = data;
 }
 
@@ -52,14 +53,23 @@ bool LisaMemory::load_hex(const std::string& filename) {
     }
 
     if (is_intel_hex) {
-        // Intel HEX format: :LLAAAARR[DD...]CC
+        // Intel HEX format: :LLAAAARR[DD...]CC; type 02 / 04 records carry the
+        // address above 64 KB (code in banks 2 and up, RESPIN 22)
+        unsigned upper = 0;
         while (fgets(line, sizeof(line), fp)) {
             if (line[0] != ':') continue;
             unsigned len, addr, type;
             if (sscanf(line + 1, "%02x%04x%02x", &len, &addr, &type) != 3)
                 continue;
             if (type == 0x01) break;  // EOF
+            if (type == 0x02 || type == 0x04) {
+                unsigned v;
+                if (sscanf(line + 9, "%04x", &v) == 1)
+                    upper = type == 0x04 ? v << 16 : v << 4;
+                continue;
+            }
             if (type != 0x00) continue;  // Only data records
+            addr += upper;
 
             // Ensure bytes vector is large enough
             if (addr + len > bytes.size())

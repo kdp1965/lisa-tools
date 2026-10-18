@@ -169,13 +169,13 @@ void LisaCli::cmd_help() {
     printf("  status               Show simulation run state\n");
     printf("  regs                 Display all registers\n");
     printf("  reg <name> [val]     Read/write register (a,ix,sp,pc,ra,ia)\n");
-    printf("  mem <addr> [len]     Dump data memory (default 16 bytes)\n");
+    printf("  mem <addr> [len]     Dump data memory (default 16 bytes; --rev2: < 0x8000 through the data bank, else physical)\n");
     printf("  memw <addr> <val>    Write byte to data memory\n");
     printf("  bp <addr>            Set breakpoint\n");
     printf("  bpd <addr>           Delete breakpoint\n");
     printf("  bpl                  List breakpoints\n");
     printf("  bpc                  Clear all breakpoints\n");
-    printf("  dis [addr] [count]   Disassemble (default at PC, 10 insns)\n");
+    printf("  dis [addr] [count]   Disassemble (default at PC, 10 insns; --rev2: < 0x8000 through the code bank, else physical)\n");
     printf("  trace on|off         Toggle instruction trace\n");
     printf("  icache [N[xW] [P] [direct] [stream]|off]  Model the instruction fetch (N lines of W words,\n");
     printf("                       a streaming burst) / show its counts\n");
@@ -261,8 +261,8 @@ void LisaCli::cmd_step(const std::vector<std::string>& args) {
 
 void LisaCli::print_location() {
     auto st = sim_.get_state();
-    uint16_t inst = sim_.memory().inst_read(st.pc);
-    uint16_t next = sim_.memory().inst_read((st.pc + 1) & 0x7FFF);
+    uint16_t inst = sim_.memory().inst_read(sim_.core().code_pa(st.pc));
+    uint16_t next = sim_.memory().inst_read(sim_.core().code_pa(st.pc + 1));
     printf("PC=%04X  %04X  %-24s A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
            st.pc, inst, lisa_disasm(inst, st.pc, next).c_str(),
            st.a, st.ix, st.sp, st.zflag, st.cflag);
@@ -362,6 +362,9 @@ void LisaCli::cmd_regs() {
            st.ra, st.ra, st.ia, st.ia, st.ra_cond);
     printf("  Z=%d  C=%d  COND=%d  AMODE=%d  IE=%d\n",
            st.zflag, st.cflag, st.cond, st.amode, st.ie);
+    if (sim_.core().rev2())
+        printf("  Banks: code %X  data %X  stack %X  (the upper 16K of each space; [p:0x15..0x17])\n",
+               sim_.periph().code_bank(), sim_.periph().data_bank(), sim_.periph().stack_bank());
     printf("  Cycles: %llu  Instructions: %llu\n",
            (unsigned long long)st.cycle_count, (unsigned long long)st.inst_count);
 }
@@ -399,27 +402,38 @@ void LisaCli::cmd_reg(const std::vector<std::string>& args) {
     }
 }
 
+// A CLI address below 0x8000 is the program's: through the data bank (the
+// debugger's view on the chip) or the code bank; from 0x8000 up it is
+// physical, 18 bits (bank n of the upper window = n * 0x4000)
+uint32_t LisaCli::data_phys(uint32_t a) {
+    return a < 0x8000 ? sim_.core().data_pa((uint16_t)a, false) : (a & 0x3FFFF);
+}
+
+uint32_t LisaCli::code_phys(uint32_t a) {
+    return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & 0x3FFFF);
+}
+
 void LisaCli::cmd_mem(const std::vector<std::string>& args) {
     if (args.size() < 2) {
         printf("Usage: mem <addr> [length]\n");
         return;
     }
-    uint16_t addr = parse_addr(args[1]) & 0x7FFF;
+    uint32_t addr = parse_addr(args[1]) & 0x3FFFF;
     int len = 16;
     if (args.size() > 2) len = (int)parse_number(args[2]);
     if (len <= 0) len = 16;
     if (len > 256) len = 256;
 
     for (int i = 0; i < len; i += 16) {
-        printf("  %04X: ", (addr + i) & 0x7FFF);
+        printf("  %04X: ", addr + i);
         int row = std::min(16, len - i);
         for (int j = 0; j < row; j++) {
-            printf("%02X ", sim_.memory().data_read((addr + i + j) & 0x7FFF));
+            printf("%02X ", sim_.memory().data_read(data_phys(addr + i + j)));
         }
         // ASCII
         printf(" |");
         for (int j = 0; j < row; j++) {
-            uint8_t ch = sim_.memory().data_read((addr + i + j) & 0x7FFF);
+            uint8_t ch = sim_.memory().data_read(data_phys(addr + i + j));
             printf("%c", (ch >= 0x20 && ch < 0x7F) ? ch : '.');
         }
         printf("|\n");
@@ -432,9 +446,9 @@ void LisaCli::cmd_memw(const std::vector<std::string>& args) {
         printf("Usage: memw <addr> <value>\n");
         return;
     }
-    uint16_t addr = parse_addr(args[1]) & 0x7FFF;
+    uint32_t addr = parse_addr(args[1]) & 0x3FFFF;
     uint8_t val = parse_addr(args[2]) & 0xFF;
-    sim_.memory().data_write(addr, val);
+    sim_.memory().data_write(data_phys(addr), val);
     printf("  [%04X] = %02X\n", addr, val);
 }
 
@@ -472,8 +486,8 @@ void LisaCli::cmd_bpl() {
     } else {
         printf("Breakpoints:\n");
         for (int i = 0; i < n; i++) {
-            uint16_t inst = sim_.memory().inst_read(addrs[i]);
-            uint16_t next = sim_.memory().inst_read((addrs[i] + 1) & 0x7FFF);
+            uint16_t inst = sim_.memory().inst_read(sim_.core().code_pa(addrs[i]));
+            uint16_t next = sim_.memory().inst_read(sim_.core().code_pa(addrs[i] + 1));
             printf("  [%d] %04X: %-24s", i, addrs[i], lisa_disasm(inst, addrs[i], next).c_str());
             const lisa::CdbLine* l = sim_.cdb().loaded() ? sim_.cdb().line_at(addrs[i]) : nullptr;
             if (l) printf("  %s:%d in %s()", l->file.c_str(), l->line, sim_.cdb().function_at(addrs[i])->name.c_str());
@@ -490,19 +504,19 @@ void LisaCli::cmd_bpc() {
 
 void LisaCli::cmd_dis(const std::vector<std::string>& args) {
     auto st = sim_.get_state();
-    uint16_t addr = st.pc;
+    uint32_t addr = st.pc;
     int count = 10;
 
-    if (args.size() > 1) addr = parse_addr(args[1]) & 0x7FFF;
+    if (args.size() > 1) addr = parse_addr(args[1]) & 0x3FFFF;
     if (args.size() > 2) count = (int)parse_number(args[2]);
     if (count <= 0) count = 10;
 
     for (int i = 0; i < count; i++) {
-        uint16_t a = (addr + i) & 0x7FFF;
-        uint16_t inst = sim_.memory().inst_read(a);
-        uint16_t next = sim_.memory().inst_read((a + 1) & 0x7FFF);
+        uint32_t a = addr + i;
+        uint16_t inst = sim_.memory().inst_read(code_phys(a));
+        uint16_t next = sim_.memory().inst_read(code_phys(a + 1));
         const char* marker = (a == st.pc) ? ">" : " ";
-        printf("%s %04X: %04X  %s\n", marker, a, inst, lisa_disasm(inst, a, next).c_str());
+        printf("%s %04X: %04X  %s\n", marker, a, inst, lisa_disasm(inst, (uint16_t)(a & 0x7FFF), next).c_str());
     }
 }
 
@@ -665,7 +679,7 @@ static bool all_digits(const std::string& s) {
 // prologue, so look between the entry and pc (at most a few words in).
 bool LisaCli::frame_ra_saved(const lisa::CdbFunction& f, uint16_t pc) {
     for (uint16_t a = f.addr; a < pc && a < f.addr + 16; a++)
-        if ((sim_.memory().inst_read(a) & 0xFFFC) == 0xA160)      // sra
+        if ((sim_.memory().inst_read(sim_.core().code_pa(a)) & 0xFFFC) == 0xA160)      // sra
             return true;
     return false;
 }
@@ -903,9 +917,9 @@ void LisaCli::cmd_print(const std::vector<std::string>& args) {
     lisa::Cdb::Frame fr = frame_of(0, pc, &f);
     std::string err;
     std::string s = cdb.print(expr, f ? &fr : nullptr, &err,
-                              [this](uint16_t a) { return sim_.memory().data_read(a & 0x7FFF); },
+                              [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); },
                               [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); },
-                              [this](uint16_t w) { return sim_.memory().inst_read(w & 0x7FFF); });
+                              [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); });
     if (s.empty())
         printf("%s\n", err.c_str());
     else
@@ -925,9 +939,9 @@ void LisaCli::cmd_locals() {
         printf("PC=%04X is not in a C function\n", pc);
         return;
     }
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(a & 0x7FFF); };
+    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
     auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(w & 0x7FFF); };
+    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
     printf("%s(), entry SP=%04X%s:\n", f->name.c_str(), fr.entry_sp, fr.ra_saved ? ", RA saved" : "");
     for (int pass = 0; pass < 2; pass++) {                   // arguments, then locals
         for (const lisa::CdbSymbol* s : cdb.locals(f->name)) {
@@ -948,9 +962,9 @@ void LisaCli::cmd_locals() {
 void LisaCli::cmd_bt(const std::vector<std::string>& args) {
     const lisa::Cdb& cdb = sim_.cdb();
     const auto& calls = sim_.core().call_stack();
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(a & 0x7FFF); };
+    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
     auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(w & 0x7FFF); };
+    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
     if (args.size() > 1 && args[1] == "chip") {
         // the unwinder, each frame checked against the shadow call stack
         if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
@@ -1018,8 +1032,8 @@ void LisaCli::cmd_exits(bool into) {
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
     auto st = sim_.get_state();
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(a & 0x7FFF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(w & 0x7FFF); };
+    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
+    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
     auto frames = cdb.unwind(st.pc, st.sp, st.ra, rd, rc, 1);
     uint16_t ret = frames.empty() ? 0 : frames[0].ret_pc;
     auto ex = cdb.line_exits(st.pc, into, ret, rc);
@@ -1044,8 +1058,8 @@ void LisaCli::cmd_nexthw(int mode) {
     if (!require_stopped("nexthw")) return;
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
-    auto rd = [this](uint16_t a) { return sim_.memory().data_read(a & 0x7FFF); };
-    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(w & 0x7FFF); };
+    auto rd = [this](uint16_t a) { return sim_.memory().data_read(sim_.core().data_pa(a, false)); };
+    auto rc = [this](uint16_t w) { return sim_.memory().inst_read(sim_.core().code_pa(w & 0x7FFF)); };
     long budget = 50000000;
     bool finishing = mode == 2;
     for (int round = 0; ; round++) {

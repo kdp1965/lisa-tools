@@ -32,6 +32,8 @@ private:
     void cmd_status();
     void cmd_regs();
     void cmd_reg(const std::vector<std::string>& args);
+    uint32_t data_phys(uint32_t a);      // a CLI address to a physical one (the banks)
+    uint32_t code_phys(uint32_t a);
     void cmd_mem(const std::vector<std::string>& args);
     void cmd_memw(const std::vector<std::string>& args);
     void cmd_bp(const std::vector<std::string>& args);

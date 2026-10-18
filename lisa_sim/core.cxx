@@ -59,19 +59,33 @@ void LisaCore::call_return(uint16_t pc, bool isr) {
 
 // --- Memory access helpers ---
 
-uint8_t LisaCore::data_read(uint16_t addr, bool periph) {
+uint32_t LisaCore::code_pa(uint16_t pc) const {
+    pc &= PC_MASK;
+    if (!(pc & 0x4000)) return pc;
+    uint32_t bank = periph_ ? periph_->code_bank() : 1;
+    return (bank << 14) | (pc & 0x3FFF);
+}
+
+uint32_t LisaCore::data_pa(uint16_t addr, bool sp_rel) const {
+    addr &= D_MASK;
+    if (!(addr & 0x4000)) return addr;
+    uint32_t bank = periph_ ? (sp_rel ? periph_->stack_bank() : periph_->data_bank()) : 1;
+    return (bank << 14) | (addr & 0x3FFF);
+}
+
+uint8_t LisaCore::data_read(uint16_t addr, bool periph, bool sp_rel) {
     if (periph && periph_)
         return periph_->read(addr & 0x1FF);
     if (mem_)
-        return mem_->data_read(addr & D_MASK);
+        return mem_->data_read(data_pa(addr, sp_rel));
     return 0;
 }
 
-void LisaCore::data_write(uint16_t addr, uint8_t val, bool periph) {
+void LisaCore::data_write(uint16_t addr, uint8_t val, bool periph, bool sp_rel) {
     if (periph && periph_)
         periph_->write(addr & 0x1FF, val);
     else if (mem_)
-        mem_->data_write(addr & D_MASK, val);
+        mem_->data_write(data_pa(addr, sp_rel), val);
 }
 
 void LisaCore::update_flags_zc(uint8_t result, bool carry) {
@@ -123,21 +137,21 @@ int8_t LisaCore::sign_extend_8(uint8_t val) const {
 void LisaCore::push_byte(uint8_t val) {
     if (rev2_) {
         sp_ = (sp_ - 1) & D_MASK;
-        if (mem_) mem_->data_write(sp_ & D_MASK, val);
+        if (mem_) mem_->data_write(data_pa(sp_, true), val);
     } else {
-        if (mem_) mem_->data_write(sp_ & D_MASK, val);
+        if (mem_) mem_->data_write(data_pa(sp_, true), val);
         sp_ = (sp_ - 1) & D_MASK;
     }
 }
 
 uint8_t LisaCore::pop_byte() {
     if (rev2_) {
-        uint8_t v = mem_ ? mem_->data_read(sp_ & D_MASK) : 0;
+        uint8_t v = mem_ ? mem_->data_read(data_pa(sp_, true)) : 0;
         sp_ = (sp_ + 1) & D_MASK;
         return v;
     }
     sp_ = (sp_ + 1) & D_MASK;
-    return mem_ ? mem_->data_read(sp_ & D_MASK) : 0;
+    return mem_ ? mem_->data_read(data_pa(sp_, true)) : 0;
 }
 
 void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
@@ -281,7 +295,7 @@ int LisaCore::step() {
     // with the cond[1] the instruction found - before its own update.
     uint8_t cond_before = cond_;
     uint16_t pc_before = pc_;
-    uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
+    uint16_t inst = mem_ ? mem_->inst_read(code_pa(pc_)) : 0;
     bool skipped = !(cond_ & 1) && !ldx_stage_two_;
     bool two_stage = !skipped && (
         (inst & 0xFFF0) == 0xA160 ||                                        // sra / lra / push ix / pop ix
@@ -307,9 +321,9 @@ int LisaCore::step_inst() {
     bp_skip_pc_ = 0xFFFF;
 
     // Fetch instruction
-    uint16_t inst = mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0;
+    uint16_t inst = mem_ ? mem_->inst_read(code_pa(pc_)) : 0;
     last_inst_ = inst;
-    if (icache_) icache_->fetch(pc_ & PC_MASK);
+    if (icache_) icache_->fetch(code_pa(pc_));
     int cycles = 1;
 
     // Trace callback
@@ -659,9 +673,9 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x27) {  // 100111 = DCX [base+uimm9]
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint8_t result = val - 1;
-            data_write(d_addr, result, false);
+            data_write(d_addr, result, false, base_sp);
             cflag_ = (val == 0);     // Borrow: was 0, wraps to 0xFF
             signed_inv_ = false;
             zflag_ = (result == 0);  // Z set when new value is 0 (RTL checks old d_i==0x01)
@@ -700,7 +714,7 @@ int LisaCore::step_inst() {
         // Per RTL: MULU writes the HIGH byte of A*M to A; MUL (110001) writes LOW.
         // Neither updates Z or C.
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint16_t result;
             if (amode_ & 0x02) {
                 result = (uint16_t)((int16_t)(int8_t)a_ * (int16_t)(int8_t)val);
@@ -742,7 +756,7 @@ int LisaCore::step_inst() {
         // Per RTL (TT07 silicon): add does NOT include the carry (acc_adder = d_i);
         // only adc #imm and sub do.  signed_inversion = a[7] XOR mem[7].
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint16_t sum = (uint16_t)a_ + val;
             signed_inv_ = ((a_ ^ val) >> 7) & 1;
             a_ = sum & 0xFF;
@@ -758,7 +772,7 @@ int LisaCore::step_inst() {
     if (top6 == 0x31) {  // 110001 = MUL [base+uimm9]
         // Per RTL: MUL writes LOW byte of A*M to A; neither Z nor C is updated.
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint16_t result;
             if (amode_ & 0x02) {
                 result = (uint16_t)((int16_t)(int8_t)a_ * (int16_t)(int8_t)val);
@@ -778,7 +792,7 @@ int LisaCore::step_inst() {
         // zero operand with C=0 adds 0 instead of 256: the result is right
         // but a borrow is reported.  signed_inversion = a[7] XOR mem[7].
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint8_t adder = (uint8_t)(~(uint8_t)(val + (cflag_ ? 1 : 0)) + 1);
             uint16_t sum = (uint16_t)a_ + adder;
             signed_inv_ = ((a_ ^ val) >> 7) & 1;
@@ -794,7 +808,7 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x34) {  // 110100 = AND a, [base+uimm9]
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             a_ = a_ & val;
             zflag_ = (a_ == 0);
         }
@@ -817,7 +831,7 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x36) {  // 110110 = OR a, [base+uimm9]
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             a_ = a_ | val;
             zflag_ = (a_ == 0);
         }
@@ -829,7 +843,7 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x38) {  // 111000 = XOR a, [base+uimm9]
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             a_ = a_ ^ val;
             zflag_ = (a_ == 0);
         }
@@ -841,9 +855,9 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x39) {  // 111001 = INX [base+uimm9]
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint8_t result = val + 1;
-            data_write(d_addr, result, false);
+            data_write(d_addr, result, false, base_sp);
             cflag_ = (val == 0xFF);     // Carry: was 0xFF, wraps to 0
             signed_inv_ = false;
             zflag_ = (result == 0);     // Z set when new value is 0 (RTL checks old d_i==0xFF)
@@ -860,7 +874,7 @@ int LisaCore::step_inst() {
         // Per RTL (TT07 silicon): acc_adder = ~mem + 1 in 8 bits, so comparing
         // against a zero byte reports a borrow (a < 0) for every a.
         if (cond_ & 1) {
-            uint8_t val = data_read(d_addr, false);
+            uint8_t val = data_read(d_addr, false, base_sp);
             uint8_t adder = (uint8_t)(~val + 1);
             zflag_ = (a_ == val);
             cflag_ = !(((uint16_t)a_ + adder) >> 8);
@@ -881,8 +895,8 @@ int LisaCore::step_inst() {
         // 32K data space does not.  The IX form is right.
         uint16_t swap_addr = (base_sp && !rev2_) ? (uint16_t)((sp_ + uimm9 - 512) & D_MASK) : d_addr;
         if (cond_ & 1) {
-            uint8_t val = data_read(swap_addr, false);
-            data_write(swap_addr, a_, false);
+            uint8_t val = data_read(swap_addr, false, base_sp);
+            data_write(swap_addr, a_, false, base_sp);
             a_ = val;
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -907,7 +921,7 @@ int LisaCore::step_inst() {
 
     if (top6 == 0x3C) {  // 111100 = LDAX a, [base+uimm9]
         if (cond_ & 1) {
-            a_ = data_read(d_addr, false);
+            a_ = data_read(d_addr, false, base_sp);
             zflag_ = (a_ == 0);
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -938,7 +952,7 @@ int LisaCore::step_inst() {
                 data_write(uimm9, a_, periph_access);
             } else {
                 // STAX [base+uimm9] — inst[15:10]==111110
-                data_write(d_addr, a_, false);
+                data_write(d_addr, a_, false, base_sp);
             }
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -954,8 +968,8 @@ int LisaCore::step_inst() {
         // (ix_cond goes into IX only, not into cond).
         if (cond_ & 1) {
             uint16_t addr = (sp_ + uimm9) & D_MASK;
-            uint8_t lo = data_read(addr, false);
-            uint8_t hi = data_read((addr + 1) & D_MASK, false);
+            uint8_t lo = data_read(addr, false, true);
+            uint8_t hi = data_read((addr + 1) & D_MASK, false, true);
             ix_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
             ix_cond_ = (hi >> 7) & 1;
         }
@@ -968,9 +982,9 @@ int LisaCore::step_inst() {
     if (top7 == 0x67) {  // 1100111 = STXX [sp+uimm9], ix
         if (cond_ & 1) {
             uint16_t addr = (sp_ + uimm9) & D_MASK;
-            data_write(addr, ix_ & 0xFF, false);
+            data_write(addr, ix_ & 0xFF, false, true);
             data_write((addr + 1) & D_MASK,
-                       ((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0), false);
+                       ((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0), false, true);
         }
         cond_ = 0x02 | (cond_ >> 1);
         cycles = 2;
@@ -1028,9 +1042,9 @@ int LisaCore::step_inst() {
         if ((inst >> 4) == 0xA02) {
             if (cond_ & 1) {
                 uint16_t sh_addr = (sp_ + (inst & 0x03)) & D_MASK;
-                uint8_t mem_val = data_read(sh_addr, false);
+                uint8_t mem_val = data_read(sh_addr, false, true);
                 uint8_t new_mem = (mem_val << 1) | ((a_ >> 7) & 1);
-                data_write(sh_addr, new_mem, false);
+                data_write(sh_addr, new_mem, false, true);
                 a_ = (a_ << 1) | ((amode_ & 1) ? (cflag_ ? 1 : 0) : 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1045,7 +1059,7 @@ int LisaCore::step_inst() {
         if ((inst >> 4) == 0xA03) {
             if (cond_ & 1) {
                 uint16_t sh_addr = (sp_ + (inst & 0x03)) & D_MASK;
-                uint8_t mem_val = data_read(sh_addr, false);
+                uint8_t mem_val = data_read(sh_addr, false, true);
                 uint8_t fill;
                 if (amode_ & 0x02)
                     fill = (mem_val >> 7) & 1;
@@ -1054,7 +1068,7 @@ int LisaCore::step_inst() {
                 else
                     fill = 0;
                 uint8_t new_mem = (fill << 7) | (mem_val >> 1);
-                data_write(sh_addr, new_mem, false);
+                data_write(sh_addr, new_mem, false, true);
                 a_ = ((mem_val & 1) << 7) | (a_ >> 1);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1273,11 +1287,11 @@ int LisaCore::step_inst() {
         // LDDIV (two-word): the following word is the SP-relative offset.
         // IX[7:0]<=A; RA[7:0]<=mem[SP+offset].
         if (top14 == 0x285C) {
-            uint16_t off = (mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0) & 0x1FF;
+            uint16_t off = (mem_ ? mem_->inst_read(code_pa(pc_)) : 0) & 0x1FF;
             if (cond_ & 1) {
                 ix_ = (ix_ & 0x7F00) | a_;
                 uint16_t addr = (sp_ + off) & D_MASK;
-                ra_ = (ra_ & 0x7F00) | data_read(addr, false);
+                ra_ = (ra_ & 0x7F00) | data_read(addr, false, true);
             }
             pc_ = (pc_ + 1) & PC_MASK;  // consume the offset word
             cond_ = 0x02 | (cond_ >> 1);
@@ -1602,7 +1616,7 @@ int LisaCore::step_inst() {
                 uint8_t dv = inst & 0x03;
                 uint16_t off = 0;
                 if (!(dv & 1)) {
-                    off = (mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0) & 0x1FF;
+                    off = (mem_ ? mem_->inst_read(code_pa(pc_)) : 0) & 0x1FF;
                     pc_ = (pc_ + 1) & PC_MASK;  // consume the offset word
                 }
                 if (cond_ & 1) {
@@ -1610,7 +1624,7 @@ int LisaCore::step_inst() {
                     if (dv & 1) {
                         divisor = ((amode_ & 0x02) ? (uint16_t)(int16_t)(int8_t)a_ : (uint16_t)a_);
                     } else {
-                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false);
+                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false, true);
                         divisor = ((uint16_t)mem_val << 8) | a_;
                     }
                     if (dv & 2) {
@@ -1636,7 +1650,7 @@ int LisaCore::step_inst() {
                 uint8_t dv = inst & 0x03;
                 uint16_t off = 0;
                 if (!(dv & 1)) {
-                    off = (mem_ ? mem_->inst_read(pc_ & PC_MASK) : 0) & 0x1FF;
+                    off = (mem_ ? mem_->inst_read(code_pa(pc_)) : 0) & 0x1FF;
                     pc_ = (pc_ + 1) & PC_MASK;  // consume the offset word
                 }
                 if (cond_ & 1) {
@@ -1644,7 +1658,7 @@ int LisaCore::step_inst() {
                     if (dv & 1) {
                         divisor = ((amode_ & 0x02) ? (uint16_t)(int16_t)(int8_t)a_ : (uint16_t)a_);
                     } else {
-                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false);
+                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false, true);
                         divisor = ((uint16_t)mem_val << 8) | a_;
                     }
                     if (dv & 2) {

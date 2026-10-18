@@ -27,8 +27,10 @@ static void usage(const char* prog) {
     printf("  --rev2           The second chip (ttsky26d-um-lisa-ttlc): the stack pointer at the\n");
     printf("                   byte on top of the stack (push decrements first, pop increments\n");
     printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
-    printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals), and\n");
-    printf("                   --fixed-irq. Default: the TT07 silicon\n");
+    printf("                   at sp + n, the rewritten bf16 adder (nearest even, subnormals),\n");
+    printf("                   --fixed-irq, and the bank registers [p:0x15..0x17] (code / data /\n");
+    printf("                   stack bank of the upper 16K: 512 KB of code, 256 KB of data).\n");
+    printf("                   Default: the TT07 silicon\n");
     printf("  --fixed-irq      Interrupt semantics of a fixed core: taken only between\n");
     printf("                   whole instructions (cond == 3, no ldx in flight), amode,\n");
     printf("                   cflag_save and signed_inversion shadowed. Default: the\n");
@@ -113,6 +115,7 @@ int main(int argc, char** argv) {
         sim.core().set_fixed_irq(true);
     if (rev2) {
         sim.core().set_rev2(true);
+        sim.periph().set_rev2(true);   // the bank registers 0x15-0x17 (RESPIN 22)
         lisa::Cdb::set_sp_top(0);      // the frames of sdcc --rev2 start at 0(sp)
     }
     if (icache_lines >= 0)

@@ -70,7 +70,7 @@ void InstCache::top_up() {
     }
 }
 
-void InstCache::fetch(uint16_t pc) {
+void InstCache::fetch(uint32_t pc) {
     if (!on_ || pc == spin_pc_) return;
     fetches_++;
     stamp_++;
