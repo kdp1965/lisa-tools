@@ -39,6 +39,8 @@ REV2CACHE = test_cachermw8
 # The second chip's code banks (RESPIN 22): __banked functions in banks 2 and
 # 3 through ___sdcc_bcall; REV2=1 only (three source files, see test_bank.c)
 REV2CACHE += test_bank
+# ... and its data banks: two __addressmod spaces in data banks 2 and 3
+REV2CACHE += test_dbank
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -66,6 +68,10 @@ test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank.h $(DEPS)
 	$(SDCC) $(CFLAGS) -c -o test_bank2$(SFX).rel test_bank2.c
 	$(SDCC) $(CFLAGS) -c -o test_bank3$(SFX).rel test_bank3.c
 	$(SDCC) $(CFLAGS) -o $@ test_bank.c test_bank2$(SFX).rel test_bank3$(SFX).rel -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000
+
+# the data banks: an __addressmod space's area DBANKn is linked in the window
+test_dbank$(SFX).ihx: test_dbank.c $(DEPS)
+	$(SDCC) $(CFLAGS) -o $@ $< -Wl-bDBANK2=0x4000 -Wl-bDBANK3=0x4000
 
 # the C type float on the bfloat16 unit
 test_bf16f$(SFX).ihx: test_bf16f.c $(DEPS)
