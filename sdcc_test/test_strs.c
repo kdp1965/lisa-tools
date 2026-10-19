@@ -8,6 +8,11 @@ const char msg[] = "hello";
 static char buf[24];
 static char ram[8] = "RAM str";
 static char hi[2] = "\x80";                      /* above every ASCII byte: unsigned */
+/* named constant scalars read by value (nsh's g_redirect_out2_len): loadA's
+   code-space case; --pack-const reads them with lda (ix++) */
+static const size_t k_len = sizeof(msg) - 2;
+static const unsigned short k_u16 = 0x1234;
+static const unsigned char k_u8 = 0x5A;
 int main(void)
 {
   const char *const *p;
@@ -52,6 +57,8 @@ int main(void)
   r = memmove(buf, "abcdefgh", 9);
   CHECK(20, r == buf && buf[7] == 'h' && memmove(buf + 1, buf, 7) == buf + 1 && buf[1] == 'a' && buf[7] == 'g' &&
             memmove(buf, buf + 1, 8) == buf && buf[0] == 'a' && buf[6] == 'g' && buf[7] == 0);
+  CHECK(21, k_len == 4 && strncmp("hellp", msg, k_len) == 0 && strncmp("hellp", msg, k_len + 1) > 0 &&
+            k_u16 == 0x1234 && k_u16 + k_u8 == 0x128E && k_u8 == 0x5A && msg[k_u8 - 0x59] == 'e');
   puts("["); puts(tab[1]); puts("]\n");
   printf("[%s]\n", msg);
   printf("[%s]\n", tab[2]);
