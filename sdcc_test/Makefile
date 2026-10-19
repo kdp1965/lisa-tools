@@ -46,6 +46,8 @@ REV2CACHE += test_bank
 REV2CACHE += test_dbank
 # the huge model: every function banked, the banks by --codeseg; REV2=1 only
 REV2CACHE += test_huge
+# the ldirq / stirq byte of the second chip's shadows (RESPIN 24) and ldamode; REV2=1 only
+REV2CACHE += test_ldirq
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))

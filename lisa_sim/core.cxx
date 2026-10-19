@@ -1325,8 +1325,8 @@ int LisaCore::step_inst() {
             return cycles;
         }
 
-        // AMODE: inst[15:4]==101000010100
-        if ((inst >> 4) == 0xA14) {
+        // AMODE: inst[15:3]==1010000101000 (0xA148 is ldamode, rev 2)
+        if ((inst >> 3) == 0x1428) {
             amode_ = inst & 0x07;
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;
@@ -1420,9 +1420,15 @@ int LisaCore::step_inst() {
         }
 
         // LDIRQ: inst[15:2]==10100001001000
+        // TT07: {5'b0, signed_inv, Z, C}.  Rev 2 (--fixed-irq / --rev2): the
+        // whole set rets restores, {amode[2:0], signed_inv_live, cflag_save,
+        // signed_inv_save, Z, C} - stirq takes the same byte back, so a
+        // context switch can carry the shadows (NuttX's lisa_restore)
         if (top14 == 0x2848) {
             if (cond_ & 1) {
                 a_ = (signed_inv_isr_ ? 0x04 : 0) | (zflag_isr_ ? 0x02 : 0) | (cflag_isr_ ? 0x01 : 0);
+                if (fixed_irq_)
+                    a_ |= ((amode_isr_ & 7) << 5) | (signed_inv_live_isr_ ? 0x10 : 0) | (cflag_save_isr_ ? 0x08 : 0);
                 zflag_ = (a_ == 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1437,6 +1443,23 @@ int LisaCore::step_inst() {
                 cflag_isr_ = a_ & 1;
                 zflag_isr_ = (a_ >> 1) & 1;
                 signed_inv_isr_ = (a_ >> 2) & 1;
+                if (fixed_irq_) {
+                    cflag_save_isr_ = (a_ >> 3) & 1;
+                    signed_inv_live_isr_ = (a_ >> 4) & 1;
+                    amode_isr_ = (a_ >> 5) & 7;
+                }
+            }
+            cond_ = 0x02 | (cond_ >> 1);
+            inst_count_++;
+            cycle_count_ += cycles;
+            return cycles;
+        }
+
+        // LDAMODE: inst[15:2]==10100001010010 (rev 2): A = {4'b0, ie, amode[2:0]}
+        if (top14 == 0x2852 && fixed_irq_) {
+            if (cond_ & 1) {
+                a_ = (ie_ ? 0x08 : 0) | (amode_ & 7);
+                zflag_ = (a_ == 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;

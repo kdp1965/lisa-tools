@@ -262,8 +262,8 @@ std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word) {
         if (top14 == 0x285E) return "savec";
         if (top14 == 0x285F) return "restc";
 
-        // AMODE
-        if ((inst >> 4) == 0xA14) {
+        // AMODE (0xA148 is ldamode, rev 2)
+        if ((inst >> 3) == 0x1428) {
             snprintf(buf, sizeof(buf), "amode  #%d", inst & 0x07);
             return buf;
         }
@@ -298,6 +298,7 @@ std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word) {
         // LDIRQ / STIRQ
         if (top14 == 0x2848) return "ldirq";
         if (top14 == 0x2849) return "stirq";
+        if (top14 == 0x2852) return "ldamode";
 
         // BF16 ops
         if ((inst >> 1) == 0x50F0) {
