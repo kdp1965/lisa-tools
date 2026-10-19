@@ -354,6 +354,7 @@ class LisaPyDb:
    # halted for register 6.
    # =============================================
    BANK_REGS = {'code': 0x15, 'data': 0x16, 'stack': 0x17}
+   BANK_MASK = {'code': 63, 'data': 31, 'stack': 15}   # 64 code banks, 32 granules of 8K, 16 stack banks (RESPIN 28)
 
    def readByte(self, a):
       self.writeReg(7, a)
@@ -366,21 +367,21 @@ class LisaPyDb:
       self.writeReg(6, v & 0xff)
 
    def readBanks(self):
-      banks = {k: self.readByte(0x8000 | r) & (63 if k == 'code' else 15) for k, r in self.BANK_REGS.items()}
+      banks = {k: self.readByte(0x8000 | r) & self.BANK_MASK[k] for k, r in self.BANK_REGS.items()}
       self.writeReg(7, 0)
       return banks
 
    def setBank(self, which, n):
-      self.writeByte(0x8000 | self.BANK_REGS[which], n & (63 if which == 'code' else 15))
+      self.writeByte(0x8000 | self.BANK_REGS[which], n & self.BANK_MASK[which])
       self.writeReg(7, 0)
 
-   # bytes of data RAM through the cache, an address at or above 0x4000 in
-   # data bank `bank` (None: the bank switched in); the data bank is put
-   # back after
+   # bytes of data RAM through the cache, an address in the data window
+   # 0x2000-0x3fff in granule `bank` (None: the one switched in); the data
+   # bank is put back after (above 0x4000 is the stack bank's, RESPIN 28)
    def readRam(self, addr, n, bank=None):
       old = None
-      if bank is not None and addr + n > 0x4000:
-         old = self.readByte(0x8016) & 15
+      if bank is not None and addr < 0x4000 and addr + n > 0x2000:
+         old = self.readByte(0x8016) & 31
          self.writeByte(0x8016, bank)
       self.writeReg(7, addr)
       out = []

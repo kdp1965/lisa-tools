@@ -169,7 +169,7 @@ void LisaCli::cmd_help() {
     printf("  status               Show simulation run state\n");
     printf("  regs                 Display all registers\n");
     printf("  reg <name> [val]     Read/write register (a,ix,sp,pc,ra,ia)\n");
-    printf("  mem <addr> [len]     Dump data memory (default 16 bytes; --rev2: < 0x8000 through the data bank, else physical)\n");
+    printf("  mem <addr> [len]     Dump data memory (default 16 bytes; --rev2: < 0x8000 through the banks by address, else physical)\n");
     printf("  memw <addr> <val>    Write byte to data memory\n");
     printf("  bp <addr>            Set breakpoint\n");
     printf("  bpd <addr>           Delete breakpoint\n");
@@ -402,9 +402,10 @@ void LisaCli::cmd_reg(const std::vector<std::string>& args) {
     }
 }
 
-// A CLI address below 0x8000 is the program's: through the data bank (the
-// debugger's view on the chip) or the code bank; from 0x8000 up it is
-// physical, 18 bits (bank n of the upper window = n * 0x4000)
+// A CLI address below 0x8000 is the program's: through the banks by
+// address (the debugger's view on the chip) or the code bank; from 0x8000
+// up it is physical, 18 bits (stack bank n = n * 0x4000, granule g of the
+// data window = g * 0x2000)
 uint32_t LisaCli::data_phys(uint32_t a) {
     return a < 0x8000 ? sim_.core().data_pa((uint16_t)a, false) : (a & 0x3FFFF);
 }
@@ -431,8 +432,7 @@ uint32_t LisaCli::parse_code(const std::string& s) {
     return code_phys(parse_addr(s));
 }
 
-// a data byte for the source-level views: SP-relative data (at or above
-// SP: the frames) through the stack bank, the rest through the data bank
+// a data byte for the source-level views (the banks go by address)
 uint8_t LisaCli::rd_data(uint16_t a) {
     return sim_.memory().data_read(sim_.core().data_pa(a, a >= sim_.get_state().sp));
 }

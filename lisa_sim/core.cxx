@@ -66,11 +66,18 @@ uint32_t LisaCore::code_pa(uint16_t pc) const {
     return (bank << 14) | (pc & 0x3FFF);
 }
 
+// The data space has three regions, by address whatever the form of the
+// access (ttsky26d RESPIN 28): below 0x2000 the common 8K (physical 0),
+// 0x2000-0x3FFF the data window on one of 32 granules of 8K (DB, 5 bits),
+// 0x4000 up the stack window on one of 16 banks of 16K (SB, 4 bits).  All
+// reset to 1: physical 0-32K flat, the TT07 layout (and TT07 itself)
 uint32_t LisaCore::data_pa(uint16_t addr, bool sp_rel) const {
+    (void)sp_rel;
     addr &= D_MASK;
-    if (!(addr & 0x4000)) return addr;
-    uint32_t bank = periph_ ? (sp_rel ? periph_->stack_bank() : periph_->data_bank()) : 1;
-    return (bank << 14) | (addr & 0x3FFF);
+    if (!periph_) return addr;
+    if (addr & 0x4000) return ((uint32_t)periph_->stack_bank() << 14) | (addr & 0x3FFF);
+    if (addr & 0x2000) return ((uint32_t)periph_->data_bank() << 13) | (addr & 0x1FFF);
+    return addr;
 }
 
 uint8_t LisaCore::data_read(uint16_t addr, bool periph, bool sp_rel) {

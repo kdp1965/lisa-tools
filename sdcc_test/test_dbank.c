@@ -1,9 +1,10 @@
-/* test_dbank.c - data in the second chip's data banks (ttsky26d RESPIN 22)
- * through SDCC's named address spaces: an object declared in a space made
- * with __addressmod is reached through the data window 0x4000-0x7fff after
- * the space's switch function has set the data bank [p:0x16].  Each space's
- * area (DBANK2, DBANK3) is linked at 0x4000; the stack is SP-relative and
- * stays in the stack bank. --rev2 only. */
+/* test_dbank.c - data in the second chip's data banks (ttsky26d RESPIN 22,
+ * the data map of RESPIN 28) through SDCC's named address spaces: an object
+ * declared in a space made with __addressmod is reached through the data
+ * window 0x2000-0x3fff after the space's switch function has set the data
+ * bank [p:0x16] (a granule of 8K).  Each space's area (DBANK2, DBANK3) is
+ * linked at 0x2000; the stack is above 0x4000, in the stack bank whatever
+ * the data bank. --rev2 only. */
 #include "harness.h"
 
 __sfr __at(0x216) DATA_BANK;
@@ -18,7 +19,7 @@ DBANK2 unsigned char a2[100];
 DBANK2 unsigned int  w2;
 DBANK3 unsigned char a3[100];
 DBANK3 unsigned int  w3;
-unsigned char plain[16];             /* ordinary data, below 0x4000 */
+unsigned char plain[16];             /* ordinary data, below 0x2000 */
 
 static unsigned char sum2(void)
 {

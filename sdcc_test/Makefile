@@ -96,9 +96,10 @@ test_bank$(SFX).ihx: test_bank.c test_bank2.c test_bank3.c test_bank40.c test_ba
 	$(SDCC) $(CFLAGS) -c -o test_bank40$(SFX).rel test_bank40.c
 	$(SDCC) $(CFLAGS) -o $@ test_bank.c test_bank2$(SFX).rel test_bank3$(SFX).rel test_bank40$(SFX).rel -Wl-bBANK2=0x10000 -Wl-bBANK3=0x18000 -Wl-bBANK40=0x140000
 
-# the data banks: an __addressmod space's area DBANKn is linked in the window
+# the data banks: an __addressmod space's area DBANKn is linked in the data
+# window 0x2000-0x3fff (RESPIN 28; 0x4000 before it)
 test_dbank$(SFX).ihx: test_dbank.c $(DEPS)
-	$(SDCC) $(CFLAGS) -o $@ $< -Wl-bDBANK2=0x4000 -Wl-bDBANK3=0x4000
+	$(SDCC) $(CFLAGS) -o $@ $< -Wl-bDBANK2=0x2000 -Wl-bDBANK3=0x2000
 
 # the huge model (--model-huge): no __banked, no #pragma bank; a source goes
 # to a code bank with --codeseg BANKn

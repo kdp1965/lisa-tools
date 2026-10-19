@@ -37,10 +37,10 @@ namespace PeriphReg {
     constexpr uint8_t UART2_STATUS    = 0x13;
     constexpr uint8_t UART_INT_EN     = 0x14;
 
-    // The banks (the second chip, RESPIN 22): code 6 bits, data / stack 4, reset 1
+    // The banks (the second chip, RESPIN 22 / 28): code 6 bits, data 5, stack 4, reset 1
     constexpr uint8_t BANK_CODE       = 0x15;  // fetches above word 0x4000
-    constexpr uint8_t BANK_DATA       = 0x16;  // IX-relative and debugger accesses above 0x4000
-    constexpr uint8_t BANK_STACK      = 0x17;  // SP-relative accesses above 0x4000
+    constexpr uint8_t BANK_DATA       = 0x16;  // the data window 0x2000-0x3FFF: 32 granules of 8K (RESPIN 28)
+    constexpr uint8_t BANK_STACK      = 0x17;  // the stack window 0x4000-0x7FFF: 16 banks of 16K
     constexpr uint8_t BANK_CONST      = 0x1F;  // KB: the bank lda (ix++) reads constants from (ttsky26d RESPIN 26)
 
     // Timer 2
