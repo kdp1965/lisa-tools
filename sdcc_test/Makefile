@@ -48,6 +48,8 @@ REV2CACHE += test_dbank
 REV2CACHE += test_huge
 # the ldirq / stirq byte of the second chip's shadows (RESPIN 24) and ldamode; REV2=1 only
 REV2CACHE += test_ldirq
+# the UART1 interrupts (RESPIN 25): the enables, a transmit-empty interrupt, two typed bytes; REV2=1 only
+REV2CACHE += test_uartirq
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -101,6 +103,9 @@ test_cacheseq.ihx test_cacheloop.ihx test_cachermw.ihx test_cachepush.ihx test_c
 # interrupt semantics (see README-lisa.md "Interrupts on TT07")
 SIMFLAGS_test_irq = --fixed-irq
 export SIMFLAGS_test_irq
+# the bench types "Hi" into UART1 once the program has set up its interrupt
+SIMFLAGS_test_uartirq = --send Hi --send-at 60000
+export SIMFLAGS_test_uartirq
 
 check: all
 	@pass=0; fail=0; \

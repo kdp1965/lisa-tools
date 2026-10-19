@@ -23,7 +23,11 @@ void LisaUart::reset() {
 
 void LisaUart::write_tx(uint8_t data) {
     tx_out_.push(data);
-    tx_empty_ = true;  // In functional sim, byte transmits instantly
+    // the byte is out at once, but the buffer reads busy for a character
+    // time (char_cycles, or 100 cycles): the chip raises its transmit
+    // interrupt on the edge of the buffer emptying, so there has to be one
+    tx_empty_ = false;
+    tx_busy_ = char_cycles_ ? char_cycles_ : 100;
 
     // Forward to host serial port if connected
     if (host_serial_) {
@@ -47,6 +51,10 @@ void LisaUart::inject_rx(uint8_t byte) {
 }
 
 void LisaUart::advance(uint32_t cycles) {
+    if (!tx_empty_) {
+        if (tx_busy_ > cycles) tx_busy_ -= cycles;
+        else { tx_busy_ = 0; tx_empty_ = true; }
+    }
     if (!fifo_depth_ || rx_wire_.empty()) return;
     if (wire_wait_ > cycles) { wire_wait_ -= cycles; return; }
     wire_wait_ = char_cycles_;

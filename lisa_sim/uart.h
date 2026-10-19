@@ -55,6 +55,7 @@ private:
     int      fifo_depth_ = 0;
     uint32_t char_cycles_ = 0;
     uint32_t wire_wait_ = 0;      // cycles until the next byte lands in the FIFO
+    uint32_t tx_busy_ = 0;        // cycles until the byte being sent has left (tx_buf_empty again)
     bool     overrun_ = false;
 
     // Host serial port bridge

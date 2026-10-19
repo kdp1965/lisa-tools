@@ -14,6 +14,8 @@ static void usage(const char* prog) {
     printf("  -t, --trace      Enable instruction trace\n");
     printf("  -b, --batch      Batch mode (run and exit)\n");
     printf("  -c N             Run for N cycles then stop\n");
+    printf("  --send TEXT      Type TEXT into UART1 (\\r \\n \\t \\xHH as in C) ...\n");
+    printf("  --send-at N      ... after N cycles of the run (batch / -r; default: before it)\n");
     printf("  -s N             Run for N steps then stop\n");
     printf("  -p PORT          Connect UART1 to host serial port\n");
     printf("     --port PORT\n");
@@ -53,6 +55,8 @@ int main(int argc, char** argv) {
     int icache_lines = -1, icache_words = 4, icache_penalty = 0;
     bool icache_direct = false, icache_stream = false;
     uint64_t max_cycles = 0;
+    std::string send_text;
+    uint64_t send_at = 0;
     int max_steps = 0;
     std::string serial_port;
 
@@ -69,6 +73,22 @@ int main(int argc, char** argv) {
             auto_run = true;
         } else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
             max_cycles = strtoull(argv[++i], nullptr, 0);
+        } else if (strcmp(argv[i], "--send") == 0 && i + 1 < argc) {
+            const char* t = argv[++i];
+            for (size_t k = 0; t[k]; k++) {      // \r \n \t \\ \xHH as in C
+                char c = t[k];
+                if (c == '\\' && t[k + 1]) {
+                    char e = t[++k];
+                    if (e == 'n') c = '\n';
+                    else if (e == 'r') c = '\r';
+                    else if (e == 't') c = '\t';
+                    else if (e == 'x' && t[k + 1] && t[k + 2]) { c = (char)strtol(std::string(t + k + 1, 2).c_str(), nullptr, 16); k += 2; }
+                    else c = e;
+                }
+                send_text += c;
+            }
+        } else if (strcmp(argv[i], "--send-at") == 0 && i + 1 < argc) {
+            send_at = strtoull(argv[++i], nullptr, 0);
             auto_run = true;
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             max_steps = atoi(argv[++i]);
@@ -156,10 +176,19 @@ int main(int argc, char** argv) {
     }
 
     if (auto_run) {
+        // --send: the text into UART1, after --send-at cycles of the run
+        auto type_text = [&]() { for (char c : send_text) sim.uart_send((uint8_t)c, 1); };
+        if (!send_text.empty() && (send_at == 0 || max_steps > 0)) type_text();
+        else if (!send_text.empty()) {
+            uint64_t first = max_cycles > 0 && send_at > max_cycles ? max_cycles : send_at;
+            sim.run_cycles(first);
+            type_text();
+            if (max_cycles > 0) max_cycles = max_cycles > first ? max_cycles - first : 0;
+        }
         if (max_steps > 0) {
             sim.step_n(max_steps);
-        } else if (max_cycles > 0) {
-            sim.run_cycles(max_cycles);
+        } else if (max_cycles > 0 || !send_text.empty()) {
+            if (max_cycles > 0) sim.run_cycles(max_cycles);
         } else {
             sim.run();
         }
