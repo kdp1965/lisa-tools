@@ -60,6 +60,8 @@ REV2CACHE += test_ldirq
 REV2CACHE += test_uartirq
 # lda (ix++) and the constant bank KB (RESPIN 26): words read from the lower half and from bank 2; REV2=1 only
 REV2CACHE += test_ldk
+# the divider's two results (the remainder in IX) and the chained step divc (RESPIN 27); REV2=1 only
+REV2CACHE += test_divc
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -75,6 +77,11 @@ DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/buil
 
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
 test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
+	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+
+# the 64-bit library's frames outgrow the 128-byte RAM: stack at the top of
+# 32K (the chip testbench runs it with the cache on)
+test_divc$(SFX).ihx: test_divc.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # its sp cases put a byte 0x80 above the stack, which must stay below 0x8000

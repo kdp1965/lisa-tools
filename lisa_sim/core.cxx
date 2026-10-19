@@ -275,10 +275,18 @@ void LisaCore::div_aftermath(uint8_t dv, uint16_t off, uint16_t divisor, bool is
     ra_cond_ = true;
     ix_ = 0;
     ix_cond_ = false;
-    // TT07's stray write of the low byte (RESPIN.md item 8); the second
-    // chip's divider writes nothing to memory
-    if (rev2_)
+    // The second chip (RESPIN 8, 27): the whole 16-bit result in RA with
+    // bit 15 as ra_cond (a quotient by one is the dividend), the other
+    // result - the remainder after div, the quotient after rem - in IX,
+    // and no memory write
+    if (rev2_) {
+        ra_ = div_->result() & 0x7FFF;
+        ra_cond_ = (div_->result() & 0x8000) != 0;
+        ix_ = div_->other() & 0x7FFF;
+        ix_cond_ = (div_->other() & 0x8000) != 0;
         return;
+    }
+    // TT07's stray write of the low byte (RESPIN.md item 8)
     if (!(dv & 1)) {
         if (!(off & 2))
             data_write(off & D_MASK, a_, false);
@@ -300,6 +308,7 @@ int LisaCore::step() {
     bool two_stage = !skipped && (
         (inst & 0xFFF0) == 0xA160 ||                                        // sra / lra / push ix / pop ix
         (inst & 0xFFFC) == 0xA170 ||                                        // lddiv
+        (rev2_ && (inst & 0xFFFC) == 0xA174) ||                             // divc (rev 2)
         ((inst >> 9) & 0x7F) == 0x66 || ((inst >> 9) & 0x7F) == 0x67 ||    // ldxx / stxx
         (inst & 0xFFF8) == 0xA300);                                         // div / rem
     int cycles = step_inst();
@@ -1675,9 +1684,29 @@ int LisaCore::step_inst() {
                     }
                     int op = (amode_ & 0x02) ? 1 : 0;  // signed vs unsigned div
                     div_->start(dividend, divisor, op);
-                    a_ = div_->result() & 0xFF;
-                    zflag_ = (a_ == 0);
+                    a_ = div_->result() & 0xFF;   // Z untouched: the RTL loads A in the stage-two wait, past the zflag logic
                     div_aftermath(dv, off, divisor, true);
+                }
+                cond_ = 0x02 | (cond_ >> 1);
+                cycles = 2;
+                inst_count_++;
+                cycle_count_ += cycles;
+                return cycles;
+            }
+
+            // DIVC (the second chip, RESPIN 27): {IX, A} / the divisor of
+            // the last div / rem, 8 steps: the quotient byte to A and RA,
+            // the remainder to IX - the step of a long division of any
+            // width by a 16-bit divisor, the remainder carried in IX
+            // (which must be below the divisor).  Unsigned.
+            if (rev2_ && (inst & 0xFFFC) == 0xA174) {
+                if (cond_ & 1) {
+                    div_->chain((uint16_t)((ix_cond_ ? 0x8000 : 0) | (ix_ & 0x7FFF)), a_);
+                    a_ = div_->result() & 0xFF;
+                    ra_ = div_->result() & 0x7FFF;
+                    ra_cond_ = (div_->result() & 0x8000) != 0;
+                    ix_ = div_->other() & 0x7FFF;
+                    ix_cond_ = (div_->other() & 0x8000) != 0;
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 cycles = 2;
@@ -1709,8 +1738,7 @@ int LisaCore::step_inst() {
                     }
                     int op = (amode_ & 0x02) ? 3 : 2;  // signed vs unsigned rem
                     div_->start(dividend, divisor, op);
-                    a_ = div_->result() & 0xFF;
-                    zflag_ = (a_ == 0);
+                    a_ = div_->result() & 0xFF;   // Z untouched (as div)
                     div_aftermath(dv, off, divisor, false);
                 }
                 cond_ = 0x02 | (cond_ >> 1);
