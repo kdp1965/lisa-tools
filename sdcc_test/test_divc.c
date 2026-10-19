@@ -6,7 +6,8 @@
  * width by a 16-bit divisor is one divc per byte, the remainder carried in
  * IX.  Signed mode (amode[1]) as C: the remainder takes the dividend's sign.
  * The chains are checked against the C library's 64-bit division (the
- * bit-serial loop, independent of the divider).  sdcc --rev2 only. */
+ * bit-serial loop, independent of the divider) and then, against constants,
+ * the library itself on the step (divull.s).  sdcc --rev2 only. */
 #include "harness.h"
 
 volatile unsigned int g_dd, g_dv;         /* the dividend and divisor in */
@@ -171,7 +172,8 @@ static void do_step(void) __naked
   __endasm;
 }
 
-static unsigned long long g_v;
+static volatile unsigned long long g_v;
+static volatile long long g_sv;
 
 /* the chain of g_v / d against the C library */
 static unsigned char chain_ok(unsigned long long v, unsigned int d)
@@ -248,6 +250,18 @@ int main(void)
   CHECK(24, chain_ok(0xffffffffffffffffULL, 3));
   CHECK(25, chain_ok(0x00000000ffffffffULL, 7));
   CHECK(26, chain_ok(0x8000000000000000ULL, 0x8001));
+
+  /* the library's 64-bit division and remainder (divull.s: the chain for a
+   * divisor below 65536, the bit-serial loop above) against constants */
+  CHECK(27, g_v / 10 == 0x01b69b4ba630f34eULL && g_v % 10 == 9);
+  CHECK(28, g_v / 1000 == 0x000462d53c8abac0ULL && g_v % 1000 == 0x315);
+  CHECK(29, g_v / 65535 == 0x000011222216a000ULL && g_v % 65535 == 0x2115);
+  CHECK(30, g_v / 0x8000 == 0x0000224421e8fbd3ULL && g_v % 0x8000 == 0x115);
+  CHECK(31, g_v / 65536 == 0x0000112210f47de9ULL && g_v % 65536 == 0x8115);
+  CHECK(32, g_v / 1000000 == 0x0000011f71fb04cbULL && g_v % 1000000 == 0x6f855);
+  g_sv = -(long long)g_v;                         /* signed: _divslonglong / _modslonglong on it */
+  CHECK(33, g_sv / 10 == -(long long)0x01b69b4ba630f34eLL);
+  CHECK(34, g_sv % 10 == -9);
 
   DONE();
   return 0;
