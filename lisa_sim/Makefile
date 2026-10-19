@@ -43,8 +43,8 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 # Dependencies (auto-generated would be better, but keep it simple)
-main.o:      main.cxx simulator.h cli.h icache.h
-core.o:      core.cxx core.h memory.h disasm.h bf16.h div.h icache.h
+main.o:      main.cxx simulator.h cli.h icache.h core.h memory.h periph.h uart.h
+core.o:      core.cxx core.h memory.h disasm.h bf16.h div.h icache.h periph.h uart.h
 memory.o:    memory.cxx memory.h
 periph.o:    periph.cxx periph.h uart.h
 uart.o:      uart.cxx uart.h serial.h
@@ -52,7 +52,7 @@ bf16.o:      bf16.cxx bf16.h
 div.o:       div.cxx div.h
 disasm.o:    disasm.cxx disasm.h
 simulator.o: simulator.cxx simulator.h core.h memory.h periph.h uart.h icache.h ../lisa_cdb/cdb.h
-cli.o:       cli.cxx cli.h simulator.h disasm.h icache.h ../lisa_cdb/cdb.h
+cli.o:       cli.cxx cli.h simulator.h disasm.h icache.h core.h memory.h periph.h uart.h ../lisa_cdb/cdb.h
 icache.o:    icache.cxx icache.h
 serial.o:    serial.cxx serial.h
 ../lisa_cdb/cdb.o: ../lisa_cdb/cdb.cxx ../lisa_cdb/cdb.h

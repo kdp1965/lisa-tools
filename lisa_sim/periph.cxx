@@ -237,18 +237,29 @@ void LisaPeripherals::tick() {
     }
     port_a_prev_ = port_a_in_;
 
-    // UART interrupt generation
+    // UART interrupt generation.  As lisa_periph.v: the request is the
+    // rising edge of "receive data available" or of "transmit buffer
+    // empty" while that enable is set - not a level.  A byte that is
+    // already waiting when the receive interrupt is enabled raises
+    // nothing (a driver drains the FIFO itself then), nor does a second
+    // byte queued behind an unread one.
     if (uart1_) {
-        if ((uart_int_en_ & 0x01) && uart1_->rx_data_avail())
+        bool rx = uart1_->rx_data_avail(), tx = uart1_->tx_buf_empty();
+        if ((uart_int_en_ & 0x01) && rx && !uart1_rx_avail_p_)
             int_status_ |= IntSrc::UART1;
-        if ((uart_int_en_ & 0x02) && uart1_->tx_buf_empty())
+        if ((uart_int_en_ & 0x02) && tx && !uart1_tx_empty_p_)
             int_status_ |= IntSrc::UART1;
+        uart1_rx_avail_p_ = rx;
+        uart1_tx_empty_p_ = tx;
     }
     if (uart2_) {
-        if ((uart_int_en_ & 0x04) && uart2_->rx_data_avail())
+        bool rx = uart2_->rx_data_avail(), tx = uart2_->tx_buf_empty();
+        if ((uart_int_en_ & 0x04) && rx && !uart2_rx_avail_p_)
             int_status_ |= IntSrc::UART2;
-        if ((uart_int_en_ & 0x08) && uart2_->tx_buf_empty())
+        if ((uart_int_en_ & 0x08) && tx && !uart2_tx_empty_p_)
             int_status_ |= IntSrc::UART2;
+        uart2_rx_avail_p_ = rx;
+        uart2_tx_empty_p_ = tx;
     }
 }
 
