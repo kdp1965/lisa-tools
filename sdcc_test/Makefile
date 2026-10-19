@@ -23,6 +23,14 @@ SFX      = _rev2
 CFLAGS  += --rev2
 REV2SIM  = --rev2
 endif
+# PACK=1: the second chip with constants packed two to a word and read with
+# lda (ix++) (sdcc --pack-const, ttsky26d RESPIN 26) as *_rev2k.ihx
+ifneq ($(PACK),)
+REV2     = 1
+SFX      = _rev2k
+CFLAGS  += --rev2 --pack-const
+REV2SIM  = --rev2
+endif
 
 SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
 # long long arithmetic through the library: built, not checked - its signed
@@ -50,6 +58,8 @@ REV2CACHE += test_huge
 REV2CACHE += test_ldirq
 # the UART1 interrupts (RESPIN 25): the enables, a transmit-empty interrupt, two typed bytes; REV2=1 only
 REV2CACHE += test_uartirq
+# lda (ix++) and the constant bank KB (RESPIN 26): words read from the lower half and from bank 2; REV2=1 only
+REV2CACHE += test_ldk
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
@@ -58,7 +68,7 @@ all: $(TESTS:%=%$(SFX).ihx)
 
 # a new compiler or library rebuilds everything (a stale .ihx once made
 # 15 suites "fail")
-DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib)
+DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2k/lisa.lib)
 
 %$(SFX).ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $<
@@ -85,6 +95,11 @@ test_dbank$(SFX).ihx: test_dbank.c $(DEPS)
 
 # the huge model (--model-huge): no __banked, no #pragma bank; a source goes
 # to a code bank with --codeseg BANKn
+# lda (ix++) reading from bank 2: the pattern of test_ldk2.c placed there
+test_ldk$(SFX).ihx: test_ldk.c test_ldk2.c $(DEPS)
+	$(SDCC) $(CFLAGS) --codeseg BANK2 -c -o test_ldk2$(SFX).rel test_ldk2.c
+	$(SDCC) $(CFLAGS) -o $@ test_ldk.c test_ldk2$(SFX).rel -Wl-bBANK2=0x10000
+
 test_huge$(SFX).ihx: test_huge.c test_huge5.c test_huge6.c test_huge.h $(DEPS)
 	$(SDCC) $(CFLAGS) --model-huge --codeseg BANK5 -c -o test_huge5$(SFX).rel test_huge5.c
 	$(SDCC) $(CFLAGS) --model-huge --codeseg BANK6 -c -o test_huge6$(SFX).rel test_huge6.c
