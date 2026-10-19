@@ -103,6 +103,7 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
     case PeriphReg::BANK_CODE:       return rev2_ ? code_bank_ : 0;
     case PeriphReg::BANK_DATA:       return rev2_ ? data_bank_ : 0;
     case PeriphReg::BANK_STACK:      return rev2_ ? stack_bank_ : 0;
+    case PeriphReg::BANK_CONST:      return rev2_ ? const_bank_ : 0;
 
     default:
         return 0;
@@ -121,6 +122,7 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
     case PeriphReg::BANK_CODE:       if (rev2_) code_bank_  = val & 0x3F; break;     // 6 bits: 64 code banks
     case PeriphReg::BANK_DATA:       if (rev2_) data_bank_  = val & 0x0F; break;
     case PeriphReg::BANK_STACK:      if (rev2_) stack_bank_ = val & 0x0F; break;
+    case PeriphReg::BANK_CONST:      if (rev2_) const_bank_ = val & 0x3F; break;     // KB (RESPIN 26)
 
     // Timer 1
     case PeriphReg::TIM1_PREDIV_LO:

@@ -1455,6 +1455,24 @@ int LisaCore::step_inst() {
             return cycles;
         }
 
+        // LDA (IX++): inst[15:2]==10100001010011 (rev 2, ttsky26d RESPIN 26):
+        // A = byte IX[0] of the code word at {KB, IX[14:1]} - KB the constant
+        // bank, peripheral 0x21F - then IX + 1 (its condition bit kept).  Z
+        // from the byte.  Constants packed two to a word, in any bank.
+        if (top14 == 0x2853 && rev2_) {
+            if (cond_ & 1) {
+                uint32_t word_pa = ((uint32_t)(periph_ ? periph_->const_bank() : 0) << 14) | ((ix_ & 0x7FFF) >> 1);
+                uint16_t w = mem_ ? mem_->inst_read(word_pa) : 0;
+                a_ = (ix_ & 1) ? (uint8_t)(w >> 8) : (uint8_t)(w & 0xFF);
+                zflag_ = (a_ == 0);
+                ix_ = (ix_ & ~0x7FFFu) | ((ix_ + 1) & 0x7FFF);
+            }
+            cond_ = 0x02 | (cond_ >> 1);
+            inst_count_++;
+            cycle_count_ += 2;
+            return 2;
+        }
+
         // LDAMODE: inst[15:2]==10100001010010 (rev 2): A = {4'b0, ie, amode[2:0]}
         if (top14 == 0x2852 && fixed_irq_) {
             if (cond_ & 1) {

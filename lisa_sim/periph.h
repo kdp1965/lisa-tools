@@ -41,6 +41,7 @@ namespace PeriphReg {
     constexpr uint8_t BANK_CODE       = 0x15;  // fetches above word 0x4000
     constexpr uint8_t BANK_DATA       = 0x16;  // IX-relative and debugger accesses above 0x4000
     constexpr uint8_t BANK_STACK      = 0x17;  // SP-relative accesses above 0x4000
+    constexpr uint8_t BANK_CONST      = 0x1F;  // KB: the bank lda (ix++) reads constants from (ttsky26d RESPIN 26)
 
     // Timer 2
     constexpr uint8_t TIM2_PREDIV_LO  = 0x18;
@@ -93,6 +94,7 @@ public:
     // The bank registers exist on the second chip only (--rev2); the core's
     // code_pa / data_pa read them
     void set_rev2(bool on) { rev2_ = on; }
+    uint8_t const_bank() const { return rev2_ ? const_bank_ : 0; }
     uint8_t code_bank() const { return code_bank_; }
     uint8_t data_bank() const { return data_bank_; }
     uint8_t stack_bank() const { return stack_bank_; }
@@ -144,6 +146,7 @@ private:
     uint8_t uart_int_en_;
     bool    rev2_ = false;
     uint8_t code_bank_ = 1, data_bank_ = 1, stack_bank_ = 1;
+    uint8_t const_bank_ = 0;      // KB, 0x21F: reset 0, the lower half
 
     // I2C (simplified)
     uint16_t i2c_prescale_;
