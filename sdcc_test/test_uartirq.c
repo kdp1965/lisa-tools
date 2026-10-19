@@ -16,13 +16,15 @@ volatile unsigned char rx_buf[4];
 
 void uart1_isr(void) __interrupt(LISA_INT_UART1)
 {
-  while ((UART1_STATUS & 0x01) != 0)    /* the request stays up until the FIFO is empty */
-    {
-      unsigned char c = UART1_DATA;
-      if (rx_n < 4)
-        rx_buf[rx_n] = c;
-      rx_n++;
-    }
+  if ((UART_INT_EN & 0x01) != 0)        /* reads only what it asked for: the bench's bytes
+                                         * may arrive during the transmit checks */
+    while ((UART1_STATUS & 0x01) != 0)  /* the request stays up until the FIFO is empty */
+      {
+        unsigned char c = UART1_DATA;
+        if (rx_n < 4)
+          rx_buf[rx_n] = c;
+        rx_n++;
+      }
   if ((UART_INT_EN & 0x02) != 0 && (UART1_STATUS & 0x02) != 0)
     {
       tx_ints++;
