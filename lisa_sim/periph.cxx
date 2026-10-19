@@ -66,7 +66,7 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
 
     // Interrupts
     case PeriphReg::INT_ENABLE:      return int_enable_;
-    case PeriphReg::INT_STATUS:      return int_status_;
+    case PeriphReg::INT_STATUS:      return int_status_ | uart_requests();
 
     // UART 1
     case PeriphReg::UART1_DATA:
@@ -148,7 +148,7 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
         int_enable_ = val;
         break;
     case PeriphReg::INT_STATUS:
-        int_status_ &= ~val;  // Write 1 to clear
+        int_status_ &= ~(val & ~(IntSrc::UART1 | IntSrc::UART2));  // Write 1 to clear a latched request; the UARTs' are levels
         break;
 
     // UART 1
@@ -161,7 +161,9 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
         if (uart2_) uart2_->write_tx(val);
         break;
     case PeriphReg::UART_INT_EN:
-        uart_int_en_ = val;
+        // TT07's lisa_periph.v never loaded these flops (they read 0; no
+        // UART interrupt ever fired there); the second chip's do (RESPIN 25)
+        if (rev2_) uart_int_en_ = val;
         break;
 
     // Timer 2
@@ -237,32 +239,27 @@ void LisaPeripherals::tick() {
     }
     port_a_prev_ = port_a_in_;
 
-    // UART interrupt generation.  As lisa_periph.v: the request is the
-    // rising edge of "receive data available" or of "transmit buffer
-    // empty" while that enable is set - not a level.  A byte that is
-    // already waiting when the receive interrupt is enabled raises
-    // nothing (a driver drains the FIFO itself then), nor does a second
-    // byte queued behind an unread one.
-    if (uart1_) {
-        bool rx = uart1_->rx_data_avail(), tx = uart1_->tx_buf_empty();
-        if ((uart_int_en_ & 0x01) && rx && !uart1_rx_avail_p_)
-            int_status_ |= IntSrc::UART1;
-        if ((uart_int_en_ & 0x02) && tx && !uart1_tx_empty_p_)
-            int_status_ |= IntSrc::UART1;
-        uart1_rx_avail_p_ = rx;
-        uart1_tx_empty_p_ = tx;
-    }
-    if (uart2_) {
-        bool rx = uart2_->rx_data_avail(), tx = uart2_->tx_buf_empty();
-        if ((uart_int_en_ & 0x04) && rx && !uart2_rx_avail_p_)
-            int_status_ |= IntSrc::UART2;
-        if ((uart_int_en_ & 0x08) && tx && !uart2_tx_empty_p_)
-            int_status_ |= IntSrc::UART2;
-        uart2_rx_avail_p_ = rx;
-        uart2_tx_empty_p_ = tx;
-    }
+    // the UART requests are levels, not latched here: uart_requests()
+}
+
+// The UARTs' interrupt requests, as lisa_periph.v since RESPIN 25 (the
+// second chip, 2026-10-18): a byte waits and the receive interrupt is
+// enabled, or the transmitter is empty and its interrupt is enabled - a
+// level that lasts until the handler drains the FIFO, writes the next byte
+// or drops the enable; a write to INT_STATUS does not clear it.  (TT07
+// latched an edge, and its enables could not be written at all: no UART
+// interrupt ever fired there - see the write of UART_INT_EN.)
+uint8_t LisaPeripherals::uart_requests() const {
+    uint8_t r = 0;
+    if (uart1_ && (((uart_int_en_ & 0x01) && uart1_->rx_data_avail()) ||
+                   ((uart_int_en_ & 0x02) && uart1_->tx_buf_empty())))
+        r |= IntSrc::UART1;
+    if (uart2_ && (((uart_int_en_ & 0x04) && uart2_->rx_data_avail()) ||
+                   ((uart_int_en_ & 0x08) && uart2_->tx_buf_empty())))
+        r |= IntSrc::UART2;
+    return r;
 }
 
 uint8_t LisaPeripherals::get_interrupts() const {
-    return int_status_ & int_enable_;
+    return (int_status_ | uart_requests()) & int_enable_;
 }

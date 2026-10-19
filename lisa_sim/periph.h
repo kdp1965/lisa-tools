@@ -139,10 +139,9 @@ private:
 
     // Interrupts
     uint8_t int_enable_;
-    uint8_t int_status_;
+    uint8_t int_status_;          // the latched requests (timers, port, TTLC); the UARTs' are levels: uart_requests()
+    uint8_t uart_requests() const;
     uint8_t uart_int_en_;
-    bool    uart1_rx_avail_p_ = false, uart1_tx_empty_p_ = false;   // the UART interrupts are edges (lisa_periph.v)
-    bool    uart2_rx_avail_p_ = false, uart2_tx_empty_p_ = false;
     bool    rev2_ = false;
     uint8_t code_bank_ = 1, data_bank_ = 1, stack_bank_ = 1;
 
