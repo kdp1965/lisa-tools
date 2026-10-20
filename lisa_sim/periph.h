@@ -94,6 +94,7 @@ public:
     // The bank registers exist on the second chip only (--rev2); the core's
     // code_pa / data_pa read them
     void set_rev2(bool on) { rev2_ = on; }
+    void set_rev3(bool on) { rev3_ = on; }   // 7-bit code bank; no data / stack / constant banks (REV3.md)
     uint8_t const_bank() const { return rev2_ ? const_bank_ : 0; }
     uint8_t code_bank() const { return code_bank_; }
     uint8_t data_bank() const { return data_bank_; }
@@ -145,6 +146,7 @@ private:
     uint8_t uart_requests() const;
     uint8_t uart_int_en_;
     bool    rev2_ = false;
+    bool    rev3_ = false;
     uint8_t code_bank_ = 1, data_bank_ = 1, stack_bank_ = 1;
     uint8_t const_bank_ = 0;      // KB, 0x21F: reset 0, the lower half
 

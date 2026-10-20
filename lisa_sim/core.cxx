@@ -42,15 +42,15 @@ void LisaCore::reset() {
 
 // --- Shadow call stack ---
 
-void LisaCore::call_push(uint16_t ret_pc, bool isr) {
-    calls_.push_back({code_pa(ret_pc), sp_, isr});
+void LisaCore::call_push(uint32_t ret_pc, bool isr) {
+    calls_.push_back({ra_pa(ret_pc), sp_, isr});
     if (calls_.size() > 512)            // runaway: keep the recent half
         calls_.erase(calls_.begin(), calls_.begin() + 256);
 }
 
-void LisaCore::call_return(uint16_t pc, bool isr) {
+void LisaCore::call_return(uint32_t pc, bool isr) {
     for (size_t i = calls_.size(); i-- > 0; ) {
-        if (calls_[i].isr == isr && (isr || calls_[i].ret_pc == code_pa(pc))) {
+        if (calls_[i].isr == isr && (isr || calls_[i].ret_pc == ra_pa(pc))) {
             calls_.resize(i);
             return;
         }
@@ -58,6 +58,25 @@ void LisaCore::call_return(uint16_t pc, bool isr) {
 }
 
 // --- Memory access helpers ---
+
+// --rev3: a return address or code pointer carries its bank in bits 22:16
+uint32_t LisaCore::ra_pa(uint32_t ra) const {
+    if (!rev3_) return code_pa((uint16_t)ra);
+    uint16_t pc = ra & PC_MASK;
+    if (!(pc & 0x4000)) return pc;
+    return (((ra >> 16) & 0x7F) << 14) | (pc & 0x3FFF);
+}
+
+// --rev3: a link register value {bank, 0, pc + 1}; the code bank written
+uint32_t LisaCore::ra_link() const {
+    uint32_t r = (pc_ + 1) & PC_MASK;
+    if (rev3_ && periph_) r |= (uint32_t)periph_->code_bank() << 16;
+    return r;
+}
+
+void LisaCore::set_cb(uint32_t b) {
+    if (periph_) periph_->write(0x15, (uint8_t)(b & 0x7F));
+}
 
 uint32_t LisaCore::code_pa(uint16_t pc) const {
     pc &= PC_MASK;
@@ -71,8 +90,9 @@ uint32_t LisaCore::code_pa(uint16_t pc) const {
 // 0x2000-0x3FFF the data window on one of 32 granules of 8K (DB, 5 bits),
 // 0x4000 up the stack window on one of 16 banks of 16K (SB, 4 bits).  All
 // reset to 1: physical 0-32K flat, the TT07 layout (and TT07 itself)
-uint32_t LisaCore::data_pa(uint16_t addr, bool sp_rel) const {
+uint32_t LisaCore::data_pa(uint32_t addr, bool sp_rel) const {
     (void)sp_rel;
+    if (rev3_) return addr & 0x7FFFFF;        // flat 8 MB (REV3.md)
     addr &= D_MASK;
     if (!periph_) return addr;
     if (addr & 0x4000) return ((uint32_t)periph_->stack_bank() << 14) | (addr & 0x3FFF);
@@ -80,7 +100,7 @@ uint32_t LisaCore::data_pa(uint16_t addr, bool sp_rel) const {
     return addr;
 }
 
-uint8_t LisaCore::data_read(uint16_t addr, bool periph, bool sp_rel) {
+uint8_t LisaCore::data_read(uint32_t addr, bool periph, bool sp_rel) {
     if (periph && periph_)
         return periph_->read(addr & 0x1FF);
     if (mem_)
@@ -88,7 +108,7 @@ uint8_t LisaCore::data_read(uint16_t addr, bool periph, bool sp_rel) {
     return 0;
 }
 
-void LisaCore::data_write(uint16_t addr, uint8_t val, bool periph, bool sp_rel) {
+void LisaCore::data_write(uint32_t addr, uint8_t val, bool periph, bool sp_rel) {
     if (periph && periph_)
         periph_->write(addr & 0x1FF, val);
     else if (mem_)
@@ -143,21 +163,21 @@ int8_t LisaCore::sign_extend_8(uint8_t val) const {
 // way: the high byte (with the cond bit) at the lower address.
 void LisaCore::push_byte(uint8_t val) {
     if (rev2_) {
-        sp_ = (sp_ - 1) & D_MASK;
+        sp_ = (sp_ - 1) & amask();
         if (mem_) mem_->data_write(data_pa(sp_, true), val);
     } else {
         if (mem_) mem_->data_write(data_pa(sp_, true), val);
-        sp_ = (sp_ - 1) & D_MASK;
+        sp_ = (sp_ - 1) & amask();
     }
 }
 
 uint8_t LisaCore::pop_byte() {
     if (rev2_) {
         uint8_t v = mem_ ? mem_->data_read(data_pa(sp_, true)) : 0;
-        sp_ = (sp_ + 1) & D_MASK;
+        sp_ = (sp_ + 1) & amask();
         return v;
     }
-    sp_ = (sp_ + 1) & D_MASK;
+    sp_ = (sp_ + 1) & amask();
     return mem_ ? mem_->data_read(data_pa(sp_, true)) : 0;
 }
 
@@ -166,7 +186,7 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
     if (fixed_irq_) {
         // only between whole instructions: no predication in flight and no
         // ldx literal pending
-        if (cond_ != 0x03 || ldx_stage_two_) return;
+        if (cond_ != 0x03 || ldx_stage_two_ || ldxf_stage_) return;
     } else {
         // TT07: the cond[1] the instruction found, whatever it left behind
         if (!(cond_before & 2)) return;
@@ -183,6 +203,7 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
     // runs under the current cond (a skipped vector falls into the next
     // slot) and, if an ldx literal was pending, is consumed as that literal.
     ia_ = (pc_) & PC_MASK;
+    if (rev3_) ia_ |= (uint32_t)(periph_ ? periph_->code_bank() : 0) << 16;   // the bank with it (REV3.md)
     ie_ = false;
     isr_jump_ = true;
     call_push(ia_, true);
@@ -311,7 +332,7 @@ int LisaCore::step() {
     uint8_t cond_before = cond_;
     uint16_t pc_before = pc_;
     uint16_t inst = mem_ ? mem_->inst_read(code_pa(pc_)) : 0;
-    bool skipped = !(cond_ & 1) && !ldx_stage_two_;
+    bool skipped = !(cond_ & 1) && !ldx_stage_two_ && !ldxf_stage_;
     bool two_stage = !skipped && (
         (inst & 0xFFF0) == 0xA160 ||                                        // sra / lra / push ix / pop ix
         (inst & 0xFFFC) == 0xA170 ||                                        // lddiv
@@ -349,8 +370,24 @@ int LisaCore::step_inst() {
 
     // Second pass of ldx: the word is the literal, whatever it is and
     // whatever cond[0] says (lisa_core.v: exec_state & ldx_stage_two)
+    if (ldxf_stage_) {
+        // --rev3 ldxf #imm24: the low word, then {8'h0, bits 23:16}
+        if (ldxf_stage_ == 2) {
+            ldxf_lo_ = inst;
+            ldxf_stage_ = 1;
+        } else {
+            ix_ = ((uint32_t)(inst & 0x7F) << 16) | ldxf_lo_;
+            ix_cond_ = (inst >> 7) & 1;
+            ldxf_stage_ = 0;
+        }
+        pc_ = (pc_ + 1) & PC_MASK;
+        if (!ldxf_stage_) cond_ = 0x02 | (cond_ >> 1);
+        inst_count_++;
+        cycle_count_ += cycles;
+        return cycles;
+    }
     if (ldx_stage_two_) {
-        ix_ = inst & PC_MASK;
+        ix_ = rev3_ ? inst : (inst & PC_MASK);    // --rev3: a near value, the bank 0
         ix_cond_ = true;
         ldx_stage_two_ = false;
         pc_ = (pc_ + 1) & PC_MASK;
@@ -384,9 +421,9 @@ int LisaCore::step_inst() {
     bool     p_bit   = (inst >> 9) & 1;    // peripheral select for direct addressing
 
     // Compute data address for indexed ops
-    uint16_t ix_addr = (ix_ + uimm9) & D_MASK;
-    uint16_t sp_addr = (sp_ + uimm9) & D_MASK;
-    uint16_t d_addr  = base_sp ? sp_addr : ix_addr;
+    uint32_t ix_addr = (ix_ + uimm9) & amask();
+    uint32_t sp_addr = (sp_ + uimm9) & amask();
+    uint32_t d_addr  = base_sp ? sp_addr : ix_addr;
 
     // ---- Top-level decode (MSB first) ----
 
@@ -394,7 +431,7 @@ int LisaCore::step_inst() {
     if ((inst & 0x8000) == 0) {
         uint16_t target = inst & PC_MASK;
         if (!isr_jump_) {   // the vector jal keeps the interrupted RA
-            ra_ = (pc_ + 1) & PC_MASK;
+            ra_ = ra_link();
             ra_cond_ = (cond_ >> 1) & 1;
             call_push(ra_, false);
         }
@@ -455,6 +492,7 @@ int LisaCore::step_inst() {
     if (top6 == 0x23) {  // 100011 = RET #imm8
         a_ = imm8;
         pc_ = ra_ & PC_MASK;
+        if (rev3_) set_cb(ra_ >> 16);
         call_return(pc_, false);
         cond_ = 0x02 | (ra_cond_ ? 1 : 0);  // cond[1]=1, cond[0]=ra_cond
         inst_count_++;
@@ -465,6 +503,7 @@ int LisaCore::step_inst() {
     // ret: inst[15:7]==100010100
     if ((inst >> 7) == 0x114) {  // 100010100 = RET
         pc_ = ra_ & PC_MASK;
+        if (rev3_) set_cb(ra_ >> 16);
         call_return(pc_, false);
         cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         inst_count_++;
@@ -477,6 +516,7 @@ int LisaCore::step_inst() {
     if (top10 == 0x22C) {  // 1000101100
         if (cflag_) {
             pc_ = ra_ & PC_MASK;
+            if (rev3_) set_cb(ra_ >> 16);
             call_return(pc_, false);
             cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         } else {
@@ -492,6 +532,7 @@ int LisaCore::step_inst() {
     if (top10 == 0x22E) {  // 1000101110
         if (zflag_) {
             pc_ = ra_ & PC_MASK;
+            if (rev3_) set_cb(ra_ >> 16);
             call_return(pc_, false);
             cond_ = 0x02 | (ra_cond_ ? 1 : 0);
         } else {
@@ -505,7 +546,8 @@ int LisaCore::step_inst() {
 
     // rets: inst[15:6]==1000101101 = return from ISR
     if (top10 == 0x22D) {  // 1000101101
-        pc_ = ia_;
+        pc_ = ia_ & PC_MASK;
+        if (rev3_) set_cb(ia_ >> 16);
         call_return(pc_, true);
         ie_ = true;
         cflag_ = cflag_isr_;
@@ -534,13 +576,14 @@ int LisaCore::step_inst() {
     if (top11 == 0x454) {  // 10001010100 = CALL IX
         // Per RTL: PC<=IX, RA<=PC+1, ra_cond<=cond[1], then IX<=IX+1 with ix_cond<=cond[1].
         if (!isr_jump_) {
-            ra_ = (pc_ + 1) & PC_MASK;
+            ra_ = ra_link();
             ra_cond_ = (cond_ >> 1) & 1;
             call_push(ra_, false);
         }
         bool new_ix_cond = (cond_ >> 1) & 1;
         pc_ = ix_ & PC_MASK;
-        ix_ = (ix_ + 1) & PC_MASK;
+        if (rev3_) set_cb(ix_ >> 16);
+        ix_ = (ix_ + 1) & amask();
         ix_cond_ = new_ix_cond;
         cond_ = 0x03;
         inst_count_++;
@@ -549,6 +592,7 @@ int LisaCore::step_inst() {
     }
     if (top11 == 0x455) {  // 10001010101 = JMP IX
         pc_ = ix_ & PC_MASK;
+        if (rev3_) set_cb(ix_ >> 16);
         cond_ = 0x03;
         inst_count_++;
         cycle_count_ += cycles;
@@ -559,7 +603,7 @@ int LisaCore::step_inst() {
     uint16_t top14 = (inst >> 2) & 0x3FFF;
     if (top14 == 0x22B0) {  // 10001010110000 = XCHG RA
         if (cond_ & 1) {
-            uint16_t t = ix_;  ix_ = ra_;  ra_ = t;
+            uint32_t t = ix_;  ix_ = ra_;  ra_ = t;
             bool tc = ix_cond_;  ix_cond_ = ra_cond_;  ra_cond_ = tc;
         }
         pc_ = (pc_ + 1) & PC_MASK;
@@ -571,7 +615,7 @@ int LisaCore::step_inst() {
     if (top14 == 0x22B1) {  // 10001010110001 = XCHG IA
         // Per RTL: ix_cond becomes 1 (IA has no companion cond bit).
         if (cond_ & 1) {
-            uint16_t t = ix_;  ix_ = ia_;  ia_ = t;
+            uint32_t t = ix_;  ix_ = ia_;  ia_ = t;
             ix_cond_ = true;
         }
         pc_ = (pc_ + 1) & PC_MASK;
@@ -583,7 +627,7 @@ int LisaCore::step_inst() {
     if (top14 == 0x22B2) {  // 10001010110010 = XCHG SP
         // Per RTL: ix_cond becomes 1 after the swap.
         if (cond_ & 1) {
-            uint16_t t = ix_;  ix_ = sp_;  sp_ = t;
+            uint32_t t = ix_;  ix_ = sp_;  sp_ = t;
             ix_cond_ = true;
         }
         pc_ = (pc_ + 1) & PC_MASK;
@@ -667,7 +711,7 @@ int LisaCore::step_inst() {
     if (top6 == 0x25) {  // 100101 = ADS sp, #simm10
         // Per RTL: SP += sext(inst[9:0]) — 10-bit signed offset
         if (cond_ & 1) {
-            sp_ = (sp_ + sign_extend_10(inst & 0x3FF)) & D_MASK;
+            sp_ = (sp_ + sign_extend_10(inst & 0x3FF)) & amask();
         }
         cond_ = 0x02 | (cond_ >> 1);
         inst_count_++;
@@ -678,7 +722,7 @@ int LisaCore::step_inst() {
     if (top6 == 0x26) {  // 100110 = ADX ix, #simm10
         // Per RTL: IX += sext(inst[9:0]) — 10-bit signed offset; ix_cond <= 1
         if (cond_ & 1) {
-            ix_ = (ix_ + sign_extend_10(inst & 0x3FF)) & PC_MASK;
+            ix_ = (ix_ + sign_extend_10(inst & 0x3FF)) & amask();
             ix_cond_ = true;
         }
         cond_ = 0x02 | (cond_ >> 1);
@@ -983,11 +1027,18 @@ int LisaCore::step_inst() {
         // [SP+off+1], low at [SP+off]. ldxx leaves cond on the normal shift path
         // (ix_cond goes into IX only, not into cond).
         if (cond_ & 1) {
-            uint16_t addr = (sp_ + uimm9) & D_MASK;
+            uint32_t addr = (sp_ + uimm9) & amask();
             uint8_t lo = data_read(addr, false, true);
-            uint8_t hi = data_read((addr + 1) & D_MASK, false, true);
-            ix_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
-            ix_cond_ = (hi >> 7) & 1;
+            uint8_t hi = data_read((addr + 1) & amask(), false, true);
+            if (rev3_) {            // three bytes, little-endian: low, middle, {cond, 22:16}
+                uint8_t top = data_read((addr + 2) & amask(), false, true);
+                ix_ = ((uint32_t)(top & 0x7F) << 16) | ((uint32_t)hi << 8) | lo;
+                ix_cond_ = (top >> 7) & 1;
+                cycles = 3;
+            } else {
+                ix_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
+                ix_cond_ = (hi >> 7) & 1;
+            }
         }
         cond_ = 0x02 | (cond_ >> 1);
         cycles = 2;
@@ -997,10 +1048,16 @@ int LisaCore::step_inst() {
     }
     if (top7 == 0x67) {  // 1100111 = STXX [sp+uimm9], ix
         if (cond_ & 1) {
-            uint16_t addr = (sp_ + uimm9) & D_MASK;
+            uint32_t addr = (sp_ + uimm9) & amask();
             data_write(addr, ix_ & 0xFF, false, true);
-            data_write((addr + 1) & D_MASK,
-                       ((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0), false, true);
+            if (rev3_) {
+                data_write((addr + 1) & amask(), (ix_ >> 8) & 0xFF, false, true);
+                data_write((addr + 2) & amask(), ((ix_ >> 16) & 0x7F) | (ix_cond_ ? 0x80 : 0), false, true);
+                cycles = 3;
+            } else {
+                data_write((addr + 1) & D_MASK,
+                           ((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0), false, true);
+            }
         }
         cond_ = 0x02 | (cond_ >> 1);
         cycles = 2;
@@ -1212,7 +1269,7 @@ int LisaCore::step_inst() {
         // TXAU: inst[15:2]==10100000000110
         if (top14 == 0x2806) {
             if (cond_ & 1) {
-                a_ = ((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0);
+                a_ = rev3_ ? (uint8_t)((ix_ >> 8) & 0xFF) : (uint8_t)(((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0));
                 zflag_ = (a_ == 0);
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1222,9 +1279,29 @@ int LisaCore::step_inst() {
         }
 
         // TAX: inst[15:3]==1010000100000
+        if (top14 == 0x2805 && rev3_) {             // txah: A <= {cond, IX[22:16]} (REV3.md)
+            if (cond_ & 1) {
+                a_ = ((ix_ >> 16) & 0x7F) | (ix_cond_ ? 0x80 : 0);
+                zflag_ = (a_ == 0);
+            }
+            cond_ = 0x02 | (cond_ >> 1);
+            inst_count_++;
+            cycle_count_ += cycles;
+            return cycles;
+        }
+        if ((inst >> 3) == 0x1422 && rev3_) {       // taxh: {cond, IX[22:16]} <= A
+            if (cond_ & 1) {
+                ix_ = (ix_ & 0x00FFFF) | ((uint32_t)(a_ & 0x7F) << 16);
+                ix_cond_ = (a_ >> 7) & 1;
+            }
+            cond_ = 0x02 | (cond_ >> 1);
+            inst_count_++;
+            cycle_count_ += cycles;
+            return cycles;
+        }
         if ((inst >> 3) == 0x1420) {
             if (cond_ & 1) {
-                ix_ = (ix_ & 0x7F00) | a_;
+                ix_ = (ix_ & ~0xFFu & amask()) | a_;
             }
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;
@@ -1235,8 +1312,12 @@ int LisaCore::step_inst() {
         // TAXU: inst[15:3]==1010000100001
         if ((inst >> 3) == 0x1421) {
             if (cond_ & 1) {
-                ix_ = (ix_ & 0x00FF) | ((uint16_t)(a_ & 0x7F) << 8);
-                ix_cond_ = (a_ >> 7) & 1;
+                if (rev3_) {
+                    ix_ = (ix_ & 0x7F00FF) | ((uint32_t)a_ << 8);
+                } else {
+                    ix_ = (ix_ & 0x00FF) | ((uint16_t)(a_ & 0x7F) << 8);
+                    ix_cond_ = (a_ >> 7) & 1;
+                }
             }
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;
@@ -1248,10 +1329,14 @@ int LisaCore::step_inst() {
         if (top14 == 0x2858) {
             if (cond_ & 1) {
                 push_byte(ra_ & 0xFF);
-                push_byte(((ra_ >> 8) & 0x7F) | (ra_cond_ ? 0x80 : 0));
+                if (rev3_) {
+                    push_byte((ra_ >> 8) & 0xFF);
+                    push_byte(((ra_ >> 16) & 0x7F) | (ra_cond_ ? 0x80 : 0));
+                } else
+                    push_byte(((ra_ >> 8) & 0x7F) | (ra_cond_ ? 0x80 : 0));
             }
             cond_ = 0x02 | (cond_ >> 1);
-            cycles = 2;
+            cycles = rev3_ ? 3 : 2;
             inst_count_++;
             cycle_count_ += cycles;
             return cycles;
@@ -1261,12 +1346,18 @@ int LisaCore::step_inst() {
         if (top14 == 0x2859) {
             if (cond_ & 1) {
                 uint8_t hi = pop_byte();
-                uint8_t lo = pop_byte();
-                ra_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
+                if (rev3_) {
+                    uint8_t mid = pop_byte();
+                    uint8_t lo = pop_byte();
+                    ra_ = ((uint32_t)(hi & 0x7F) << 16) | ((uint32_t)mid << 8) | lo;
+                } else {
+                    uint8_t lo = pop_byte();
+                    ra_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
+                }
                 ra_cond_ = (hi >> 7) & 1;
             }
             cond_ = 0x02 | (cond_ >> 1);
-            cycles = 2;
+            cycles = rev3_ ? 3 : 2;
             inst_count_++;
             cycle_count_ += cycles;
             return cycles;
@@ -1276,10 +1367,14 @@ int LisaCore::step_inst() {
         if (top14 == 0x285A) {
             if (cond_ & 1) {
                 push_byte(ix_ & 0xFF);
-                push_byte(((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0));
+                if (rev3_) {
+                    push_byte((ix_ >> 8) & 0xFF);
+                    push_byte(((ix_ >> 16) & 0x7F) | (ix_cond_ ? 0x80 : 0));
+                } else
+                    push_byte(((ix_ >> 8) & 0x7F) | (ix_cond_ ? 0x80 : 0));
             }
             cond_ = 0x02 | (cond_ >> 1);
-            cycles = 2;
+            cycles = rev3_ ? 3 : 2;
             inst_count_++;
             cycle_count_ += cycles;
             return cycles;
@@ -1289,12 +1384,18 @@ int LisaCore::step_inst() {
         if (top14 == 0x285B) {
             if (cond_ & 1) {
                 uint8_t hi = pop_byte();
-                uint8_t lo = pop_byte();
-                ix_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
+                if (rev3_) {
+                    uint8_t mid = pop_byte();
+                    uint8_t lo = pop_byte();
+                    ix_ = ((uint32_t)(hi & 0x7F) << 16) | ((uint32_t)mid << 8) | lo;
+                } else {
+                    uint8_t lo = pop_byte();
+                    ix_ = ((uint16_t)(hi & 0x7F) << 8) | lo;
+                }
                 ix_cond_ = (hi >> 7) & 1;
             }
             cond_ = 0x02 | (cond_ >> 1);
-            cycles = 2;
+            cycles = rev3_ ? 3 : 2;
             inst_count_++;
             cycle_count_ += cycles;
             return cycles;
@@ -1305,9 +1406,9 @@ int LisaCore::step_inst() {
         if (top14 == 0x285C) {
             uint16_t off = (mem_ ? mem_->inst_read(code_pa(pc_)) : 0) & 0x1FF;
             if (cond_ & 1) {
-                ix_ = (ix_ & 0x7F00) | a_;
-                uint16_t addr = (sp_ + off) & D_MASK;
-                ra_ = (ra_ & 0x7F00) | data_read(addr, false, true);
+                ix_ = (ix_ & ~0xFFu & amask()) | a_;
+                uint32_t addr = (sp_ + off) & amask();
+                ra_ = (ra_ & ~0xFFu & amask()) | data_read(addr, false, true);
             }
             pc_ = (pc_ + 1) & PC_MASK;  // consume the offset word
             cond_ = 0x02 | (cond_ >> 1);
@@ -1352,6 +1453,13 @@ int LisaCore::step_inst() {
 
         // LDX (load IX from next word): inst[15:4]==101000011000
         // Per RTL: ix_cond becomes 1 after the load.
+        if ((inst >> 4) == 0xA19 && rev3_) {        // ldxf #imm24: two literal words follow (REV3.md)
+            ldxf_stage_ = 2;
+            cond_ &= 0x02;
+            inst_count_++;
+            cycle_count_ += cycles;
+            return cycles;
+        }
         if ((inst >> 4) == 0xA18) {
             // First pass: arm the second (lisa_core.v: ldx_stage_two <= 1,
             // cond[0] <= 0, cond[1] kept); the next word loads IX in
@@ -1382,7 +1490,7 @@ int LisaCore::step_inst() {
             if (cond_ & 1) {
                 bool use_carry = (inst >> 2) & 1;
                 uint16_t addend = (uint16_t)a_ + (use_carry && cflag_ ? 0x100 : 0);
-                ix_ = (ix_ + addend) & PC_MASK;
+                ix_ = (ix_ + addend) & amask();
                 ix_cond_ = true;
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1394,8 +1502,8 @@ int LisaCore::step_inst() {
         // ADDAXU: inst[15:5]==10100001101, inst[2:0]==001
         if (top11 == 0x50D && (inst & 0x07) == 0x01) {
             if (cond_ & 1) {
-                uint16_t upper = (ix_ >> 8) & 0x7F;
-                upper = (upper + a_) & 0x7F;
+                uint32_t um = rev3_ ? 0x7FFF : 0x7F;     // --rev3: bits 23:8
+                uint32_t upper = ((ix_ >> 8) + a_) & um;
                 ix_ = (ix_ & 0x00FF) | (upper << 8);
                 ix_cond_ = true;
             }
@@ -1411,7 +1519,7 @@ int LisaCore::step_inst() {
             if (cond_ & 1) {
                 bool use_carry = (inst >> 2) & 1;
                 uint16_t subtrahend = (uint16_t)a_ + (use_carry && cflag_ ? 0x100 : 0);
-                ix_ = (ix_ - subtrahend) & PC_MASK;
+                ix_ = (ix_ - subtrahend) & amask();
                 ix_cond_ = true;
             }
             cond_ = 0x02 | (cond_ >> 1);
@@ -1424,8 +1532,8 @@ int LisaCore::step_inst() {
         // Per RTL: ix_cond becomes 1 after the subtract.
         if (top11 == 0x50D && (inst & 0x07) == 0x03) {
             if (cond_ & 1) {
-                uint16_t upper = (ix_ >> 8) & 0x7F;
-                upper = (upper - a_) & 0x7F;
+                uint32_t um = rev3_ ? 0x7FFF : 0x7F;
+                uint32_t upper = ((ix_ >> 8) - a_) & um;
                 ix_ = (ix_ & 0x00FF) | (upper << 8);
                 ix_cond_ = true;
             }
@@ -1477,11 +1585,17 @@ int LisaCore::step_inst() {
         // from the byte.  Constants packed two to a word, in any bank.
         if (top14 == 0x2853 && rev2_) {
             if (cond_ & 1) {
-                uint32_t word_pa = ((uint32_t)(periph_ ? periph_->const_bank() : 0) << 14) | ((ix_ & 0x7FFF) >> 1);
+                uint32_t word_pa;
+                if (rev3_) {            // the bank in the pointer: {IX[22:16], IX[15:1]} as code_pa maps it (REV3.md)
+                    uint16_t pc = (ix_ >> 1) & 0x7FFF;
+                    word_pa = (pc & 0x4000) ? ((((ix_ >> 16) & 0x7F) << 14) | (pc & 0x3FFF)) : pc;
+                } else
+                    word_pa = ((uint32_t)(periph_ ? periph_->const_bank() : 0) << 14) | ((ix_ & 0x7FFF) >> 1);
                 uint16_t w = mem_ ? mem_->inst_read(word_pa) : 0;
                 a_ = (ix_ & 1) ? (uint8_t)(w >> 8) : (uint8_t)(w & 0xFF);
                 zflag_ = (a_ == 0);
-                ix_ = (ix_ & ~0x7FFFu) | ((ix_ + 1) & 0x7FFF);
+                if (rev3_) ix_ = (ix_ + 1) & 0x7FFFFF;
+                else ix_ = (ix_ & ~0x7FFFu) | ((ix_ + 1) & 0x7FFF);
             }
             cond_ = 0x02 | (cond_ >> 1);
             inst_count_++;

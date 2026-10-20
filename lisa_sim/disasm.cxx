@@ -27,7 +27,7 @@ static int16_t sext11(uint16_t v) {
     return (int16_t)(v & 0x7FF);
 }
 
-std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word) {
+std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word, uint16_t next_word2) {
     char buf[64];
 
     // === inst[15]==0: JAL ===
@@ -249,9 +249,11 @@ std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word) {
 
         // Transfers
         if (top14 == 0x2804) return "txa";
+        if (top14 == 0x2805) return "txah";                 // rev 3
         if (top14 == 0x2806) return "txau";
         if ((inst >> 3) == 0x1420) return "tax";
         if ((inst >> 3) == 0x1421) return "taxu";
+        if ((inst >> 3) == 0x1422) return "taxh";           // rev 3
 
         // RA/IX stack ops
         if (top14 == 0x2858) return "sra";
@@ -269,6 +271,10 @@ std::string lisa_disasm(uint16_t inst, uint16_t pc, uint16_t next_word) {
         }
 
         // LDX
+        if ((inst >> 4) == 0xA19) {                        // rev 3: ldxf #imm24, two words follow
+            snprintf(buf, sizeof(buf), "ldxf   #0x%02X%04X", next_word2 & 0xFF, next_word);
+            return buf;
+        }
         if ((inst >> 4) == 0xA18) {
             snprintf(buf, sizeof(buf), "ldx    #0x%04X", next_word & 0x7FFF);
             return buf;

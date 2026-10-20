@@ -17,13 +17,13 @@ class LisaPeripherals;
 // CPU state visible to debugger
 struct LisaCoreState {
     uint8_t  a;           // Accumulator (8-bit)
-    uint16_t ix;          // Index register (15-bit, stored in 16)
+    uint32_t ix;          // Index register (15 bits; --rev3: 23 bits, the condition bit beside)
     bool     ix_cond;     // IX condition bit
-    uint16_t sp;          // Stack pointer (15-bit)
+    uint32_t sp;          // Stack pointer (15 bits; --rev3: 23)
     uint16_t pc;          // Program counter (15-bit)
-    uint16_t ra;          // Return address (15-bit)
+    uint32_t ra;          // Return address (15 bits; --rev3: {bank[6:0], 0, pc[14:0]})
     bool     ra_cond;     // RA condition bit
-    uint16_t ia;          // Interrupt return address (15-bit)
+    uint32_t ia;          // Interrupt return address (15 bits; --rev3 as RA)
     bool     zflag;       // Zero flag
     bool     cflag;       // Carry flag
     uint8_t  cond;        // Condition register (2-bit)
@@ -59,7 +59,7 @@ public:
     // debugger one (lisa_periph registers 0x15-0x17, reset 1 = TT07's layout).
     // The 18-bit physical address of a 15-bit one; below 0x4000 bank 0
     uint32_t code_pa(uint16_t pc) const;
-    uint32_t data_pa(uint16_t addr, bool sp_rel) const;
+    uint32_t data_pa(uint32_t addr, bool sp_rel) const;
 
     // Execute one full instruction (returns number of cycles taken)
     int step();
@@ -84,7 +84,7 @@ public:
     // or above 0x4000 on the second chip; the window PC otherwise).
     struct CallFrame {
         uint32_t ret_pc;    // where the return goes (physical)
-        uint16_t sp;        // SP when the call was made: the callee's entry SP
+        uint32_t sp;        // SP when the call was made: the callee's entry SP
         bool     isr;       // an interrupt (returned by rets)
     };
     const std::vector<CallFrame>& call_stack() const { return calls_; }
@@ -111,6 +111,19 @@ public:
     // and the fixed interrupt semantics
     void set_rev2(bool on) { rev2_ = on; if (on) fixed_irq_ = true; }
     bool rev2() const { return rev2_; }
+    // --rev3: the third chip (REV3.md): IX, SP, RA and IA 24 bits - the
+    // condition bit at bit 23 of IX and RA, the code bank in bits 22:16 of
+    // RA and IA - the pairs three bytes, ldxf / txah / taxh, a flat 8 MB
+    // data space, 128 code banks; implies --rev2
+    void set_rev3(bool on) { rev3_ = on; if (on) { set_rev2(true); sp_ = 0x7FFFFF; } }
+    bool rev3() const { return rev3_; }
+    uint32_t amask() const { return rev3_ ? 0x7FFFFFu : 0x7FFFu; }   // the address bits of IX / SP / RA
+    uint32_t ra_pa(uint32_t ra) const;     // the physical code address a return address names
+private:
+    // --rev3: a link register value {bank, 0, pc + 1}; the code bank written
+    uint32_t ra_link() const;
+    void set_cb(uint32_t b);
+public:
 
     // Trace callback
     using TraceCallback = std::function<void(uint16_t pc, uint16_t inst, const LisaCoreState& state)>;
@@ -119,13 +132,13 @@ public:
 private:
     // Registers
     uint8_t  a_;
-    uint16_t ix_;
+    uint32_t ix_;
     bool     ix_cond_;
-    uint16_t sp_;
+    uint32_t sp_;
     uint16_t pc_;
-    uint16_t ra_;
+    uint32_t ra_;
     bool     ra_cond_;
-    uint16_t ia_;
+    uint32_t ia_;
     bool     zflag_;
     bool     cflag_;
     bool     cflag_save_;
@@ -144,6 +157,9 @@ private:
     // live signed_inversion shadowed too)
     bool     fixed_irq_ = false;
     bool     rev2_ = false;
+    bool     rev3_ = false;
+    int      ldxf_stage_ = 0;     // --rev3: ldxf consumes the next two words
+    uint16_t ldxf_lo_ = 0;
     uint8_t  amode_isr_ = 1;
     bool     cflag_save_isr_ = false;
     bool     signed_inv_live_isr_ = false;
@@ -168,8 +184,8 @@ private:
 
     // Shadow call stack
     std::vector<CallFrame> calls_;
-    void call_push(uint16_t ret_pc, bool isr);
-    void call_return(uint16_t pc, bool isr);
+    void call_push(uint32_t ret_pc, bool isr);
+    void call_return(uint32_t pc, bool isr);
 
     // Interrupts
     uint8_t  int_pending_;
@@ -184,8 +200,8 @@ private:
     TraceCallback     trace_cb_;
 
     // Internal helpers
-    uint8_t  data_read(uint16_t addr, bool periph, bool sp_rel = false);
-    void     data_write(uint16_t addr, uint8_t val, bool periph, bool sp_rel = false);
+    uint8_t  data_read(uint32_t addr, bool periph, bool sp_rel = false);
+    void     data_write(uint32_t addr, uint8_t val, bool periph, bool sp_rel = false);
     void     update_flags_zc(uint8_t result, bool carry);
     void     update_flag_z(uint8_t result);
     bool     eval_condition(uint8_t cc, bool s) const;

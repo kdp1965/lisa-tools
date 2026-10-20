@@ -264,7 +264,7 @@ void LisaCli::print_location() {
     uint16_t inst = sim_.memory().inst_read(sim_.core().code_pa(st.pc));
     uint16_t next = sim_.memory().inst_read(sim_.core().code_pa(st.pc + 1));
     printf("PC=%s  %04X  %-24s A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
-           caddr(sim_.core().pc_phys()).c_str(), inst, lisa_disasm(inst, st.pc, next).c_str(),
+           caddr(sim_.core().pc_phys()).c_str(), inst, lisa_disasm(inst, st.pc, next, sim_.memory().inst_read(sim_.core().code_pa(st.pc + 2))).c_str(),
            st.a, st.ix, st.sp, st.zflag, st.cflag);
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) return;
@@ -354,15 +354,18 @@ void LisaCli::cmd_status() {
 
 void LisaCli::cmd_regs() {
     auto st = sim_.get_state();
-    printf("  A  = %02X (%3d)     IX = %04X (%5d)  IX.c = %d\n",
-           st.a, st.a, st.ix, st.ix, st.ix_cond);
-    printf("  SP = %04X (%5d)  PC = %04X (%5d)\n",
-           st.sp, st.sp, st.pc, st.pc);
-    printf("  RA = %04X (%5d)  IA = %04X (%5d)  RA.c = %d\n",
-           st.ra, st.ra, st.ia, st.ia, st.ra_cond);
+    int w = sim_.core().rev3() ? 6 : 4;
+    printf("  A  = %02X (%3d)     IX = %0*X (%7d)  IX.c = %d\n",
+           st.a, st.a, w, st.ix, st.ix, st.ix_cond);
+    printf("  SP = %0*X (%7d)  PC = %04X (%5d)\n",
+           w, st.sp, st.sp, st.pc, st.pc);
+    printf("  RA = %0*X (%7d)  IA = %0*X (%7d)  RA.c = %d\n",
+           w, st.ra, st.ra, w, st.ia, st.ia, st.ra_cond);
     printf("  Z=%d  C=%d  COND=%d  AMODE=%d  IE=%d\n",
            st.zflag, st.cflag, st.cond, st.amode, st.ie);
-    if (sim_.core().rev2())
+    if (sim_.core().rev3())
+        printf("  Code bank: %X  (7 bits, [p:0x15]; the data space is flat)\n", sim_.periph().code_bank());
+    else if (sim_.core().rev2())
         printf("  Banks: code %X  data %X  stack %X  (the upper 16K of each space; [p:0x15..0x17])\n",
                sim_.periph().code_bank(), sim_.periph().data_bank(), sim_.periph().stack_bank());
     printf("  Cycles: %llu  Instructions: %llu\n",
@@ -383,11 +386,11 @@ void LisaCli::cmd_reg(const std::vector<std::string>& args) {
         if (!require_stopped("reg")) return;
         uint32_t val = parse_number(args[2]);
         if (name == "a")       st.a = val & 0xFF;
-        else if (name == "ix") st.ix = val & 0x7FFF;
-        else if (name == "sp") st.sp = val & 0x7FFF;
+        else if (name == "ix") st.ix = val & sim_.core().amask();
+        else if (name == "sp") st.sp = val & sim_.core().amask();
         else if (name == "pc") st.pc = val & 0x7FFF;
-        else if (name == "ra") st.ra = val & 0x7FFF;
-        else if (name == "ia") st.ia = val & 0x7FFF;
+        else if (name == "ra") st.ra = val & sim_.core().amask();
+        else if (name == "ia") st.ia = val & sim_.core().amask();
         else { printf("Unknown register: %s\n", name.c_str()); return; }
         sim_.core().set_state(st);
         printf("  %s = %04X\n", args[1].c_str(), val);
@@ -407,11 +410,12 @@ void LisaCli::cmd_reg(const std::vector<std::string>& args) {
 // up it is physical, 18 bits (stack bank n = n * 0x4000, granule g of the
 // data window = g * 0x2000)
 uint32_t LisaCli::data_phys(uint32_t a) {
+    if (sim_.core().rev3()) return a & 0x7FFFFF;          // flat
     return a < 0x8000 ? sim_.core().data_pa((uint16_t)a, false) : (a & 0x3FFFF);
 }
 
 uint32_t LisaCli::code_phys(uint32_t a) {
-    return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & 0xFFFFF);
+    return a < 0x8000 ? sim_.core().code_pa((uint16_t)a) : (a & (sim_.core().rev3() ? 0x1FFFFF : 0xFFFFF));
 }
 
 // a physical code address as text: the window address, with its bank in

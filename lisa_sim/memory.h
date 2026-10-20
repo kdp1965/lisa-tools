@@ -19,8 +19,8 @@ public:
     // window 0x2000-0x3FFF on one of 32 granules of 8K and the stack window
     // 0x4000 up on one of 16 banks of 16K (18-bit physical bytes;
     // LisaCore::code_pa / data_pa); TT07's 32K is physical 0-32K
-    static constexpr int INST_SIZE = 1 << 20;  // instruction words: 64 code banks of 16K
-    static constexpr int DATA_SIZE = 1 << 18;  // data bytes
+    static constexpr int INST_SIZE = 1 << 21;  // instruction words: 128 code banks of 16K (--rev3; 64 before)
+    static constexpr int DATA_SIZE = 1 << 23;  // data bytes: 8 MB flat (--rev3; 256 KB of banks before)
     static constexpr int PC_BITS   = 15;
     static constexpr int D_BITS    = 15;
 

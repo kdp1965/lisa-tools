@@ -26,6 +26,9 @@ static void usage(const char* prog) {
     printf("                   macro), filled by lines of P clocks (default %d + %d per word), or with\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
     printf("                   stream by a QSPI burst that keeps running (%d per word, a restart of P,\n", InstCache::FILL_PER_WORD);
     printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
+    printf("  --rev3           The third chip (REV3.md, the twenty-four-bit branch): IX, SP, RA and\n");
+    printf("                   IA 24 bits, the pairs three bytes, ldxf / txah / taxh, a flat 8 MB\n");
+    printf("                   data space, 128 code banks (implies --rev2)\n");
     printf("  --rev2           The second chip (ttsky26d-um-lisa-ttlc): the stack pointer at the\n");
     printf("                   byte on top of the stack (push decrements first, pop increments\n");
     printf("                   after; sdcc -mlisa --rev2 lays its frames out for it), swap n(sp)\n");
@@ -51,6 +54,7 @@ int main(int argc, char** argv) {
     unsigned long ram_bytes = 0;
     bool fixed_irq = false;
     bool rev2 = false;
+    bool rev3 = false;
     bool trace = false;
     int icache_lines = -1, icache_words = 4, icache_penalty = 0;
     bool icache_direct = false, icache_stream = false;
@@ -111,6 +115,9 @@ int main(int argc, char** argv) {
             fixed_irq = true;
         } else if (strcmp(argv[i], "--rev2") == 0) {
             rev2 = true;
+        } else if (strcmp(argv[i], "--rev3") == 0) {
+            rev2 = true;
+            rev3 = true;
         } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
             ram_bytes = strtoul(argv[++i], nullptr, 0);
             if (ram_bytes < 2 || ram_bytes > 32768 || (ram_bytes & (ram_bytes - 1))) {
@@ -135,6 +142,10 @@ int main(int argc, char** argv) {
         sim.memory().set_data_size(ram_bytes);
     if (fixed_irq)
         sim.core().set_fixed_irq(true);
+    if (rev3) {
+        sim.core().set_rev3(true);
+        sim.periph().set_rev3(true);
+    }
     if (rev2) {
         sim.core().set_rev2(true);
         sim.periph().set_rev2(true);   // the bank registers 0x15-0x17 (RESPIN 22)
