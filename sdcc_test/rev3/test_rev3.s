@@ -1,5 +1,6 @@
 ; test_rev3.s - the third chip's 24-bit IX, SP, RA and IA (ttsky26d REV3.md),
 ; standalone: the reset vector at word 0, the timer's handler at its vector (word 1), the
+; 24-bit pointers from symbols (ldxf #sym: the linker's R_PAG0 | R_MSB relocation), the
 ; UART at [p:0x10/0x11], ABS areas, 40 checks: the new instructions, the
 ; three-byte pairs, far data, calls and an interrupt across code banks, the
 ; divider's results, the stack above 64K, the adders, the predicate rules;
@@ -150,7 +151,7 @@ main:
 
 	; 15, 16: call ix into code bank 2 (word 0x4000 of bank 2 = flash byte 0x10000):
 	; the routine returns its bank in A and ret brings the code bank back to 0
-	ldxf	#0x824000		; {1, bank 2, pc 0x4000}
+	ldxf	#b2_bank		; {1, bank 2, pc 0x4000}: the linker's 24-bit code pointer
 	call	ix
 	cpi	#0x22
 	ldac	eq
@@ -166,7 +167,7 @@ main:
 
 	; 17: lda (ix++) reads a constant in bank 2 through the pointer's own bank:
 	; the word at 0x4008 of bank 2 holds "AB"
-	ldxf	#0x828010		; {1, bank 2, (0x4008 << 1)}
+	ldxf	#s_ab			; {1, bank 2, 0x8010}: a packed constant's pointer
 	lda	(ix++)
 	cpi	#0x41
 	ldac	eq
@@ -181,7 +182,7 @@ main:
 	jal	check
 
 	; 19: a jump through a 24-bit pointer and back: jmp ix to bank 2's word 0x4002
-	ldxf	#0x824002
+	ldxf	#b2_jump
 	call	ix			; the routine there jumps back to bank 0 with jmp ix
 	cpi	#0x33
 	ldac	eq
@@ -191,7 +192,7 @@ main:
 
 	; 20-22: an interrupt taken in code bank 2: IA carries the bank, rets
 	; returns there and brings CB back; the handler is in the common lower 16K
-	ldxf	#0x824010		; irqwait in bank 2
+	ldxf	#b2_irqwait
 	call	ix
 	lda	0x1F6			; {1 (xchg ia sets the condition bit), bank 2}
 	cpi	#0x82
@@ -368,7 +369,7 @@ main:
 	jal	check
 
 	; 37, 38: ret #imm8 from bank 2 loads A and brings CB back
-	ldxf	#0x824030
+	ldxf	#b2_reti
 	call	ix
 	cpi	#0x44
 	ldac	eq
@@ -383,7 +384,7 @@ main:
 	jal	check
 
 	; 39, 40: a call from bank 2 into bank 3 and back: each ret restores its caller's bank
-	ldxf	#0x824032
+	ldxf	#b2_nest
 	call	ix
 	cpi	#0x55
 	ldac	eq
@@ -401,11 +402,11 @@ main:
 	lda	0x1F2
 	cpi	#0
 	bz	passed
-	ldxf	#0x801016		; s_failed
+	ldxf	#s_failed
 	jal	puts
 	br	halt
 passed:
-	ldxf	#0x80100A		; s_passed
+	ldxf	#s_passed
 	jal	puts
 halt:
 	br	halt
@@ -432,10 +433,10 @@ check:
 	bz	1$
 	ldi	#1
 	sta	0x1F2			; a failure
-	ldxf	#0x801004		; s_fail
+	ldxf	#s_fail
 	jal	puts
 	br	2$
-1$:	ldxf	#0x801000		; s_ok (byte 0x1000)
+1$:	ldxf	#s_ok
 	jal	puts
 2$:	lda	0x1F3
 	shr
@@ -455,7 +456,7 @@ check:
 hexdigit:				; A = 0..15: the digit from a table in the code space
 	sra
 	sta	0x1F4
-	ldxf	#0x801023		; s_hex
+	ldxf	#s_hex
 	lda	0x1F4
 	addax
 	lda	(ix++)
@@ -499,18 +500,21 @@ s_hex:		.ascii	"0123456789abcdef"
 ; code bank 2: word 0x4000 = flash byte 0x10000
 	.area FAR2 (ABS,CODE)		; code bank 2: byte 0x10000 = word 0x8000 = window word 0x4000
 	.org 0x10000
+b2_bank:
 	ldi	#0x22			; word 0x4000: returns its bank
 	ret
+b2_jump:
 	ldi	#0x33			; word 0x4002: back to bank 0 through a pointer
-	ldxf	#0x800C00		; back (word 0xC00 of bank 0)
+	ldxf	#back
 	jmp	ix
 
 	.area KFAR2 (ABS,CODE,KDATA)	; packed constants in bank 2: byte 0x10010 = word 0x8008 = window word 0x4008
 	.org 0x10010
-	.ascii	"AB"
+s_ab:	.ascii	"AB"
 
 	.area FAR2B (ABS,CODE)
 	.org 0x10020			; window word 0x4010: irqwait - the timer on, wait for the handler, off
+b2_irqwait:
 	ldi	#0
 	sta	0x1F5
 	sta	0x20C			; TIMER1_CTRL off
@@ -539,18 +543,21 @@ s_hex:		.ascii	"0123456789abcdef"
 
 	.area FAR2C (ABS,CODE)
 	.org 0x10060			; window word 0x4030: ret #imm8 from a bank
+b2_reti:
 	ret	#0x44
 
 	.area FAR2D (ABS,CODE)
 	.org 0x10064			; window word 0x4032: into bank 3 and back
+b2_nest:
 	sra
-	ldxf	#0x834000
+	ldxf	#b3_val
 	call	ix
 	lra
 	ret
 
 	.area FAR3 (ABS,CODE)
 	.org 0x18000			; code bank 3, window word 0x4000
+b3_val:
 	ldi	#0x55
 	ret
 
