@@ -260,6 +260,8 @@ bool Cdb::load(const std::string& path, std::string* err) {
     // The linker's addresses are bytes: a code address is twice the word
     // (the PC), a code-space constant's is four times the pointer value
     // (its ldi/ret pairs, see gptrget.s); data addresses are bytes already.
+    // The third chip: a constant's pointer is {1, bank, 0x8000 | its byte
+    // offset in the bank} (the packed constants, read with lda (ix++)).
     for (CdbLine& l : lines_) l.addr /= 2;
     for (const auto& [scope, owner, name, addr] : addrs) {
         bool done = false;
@@ -274,7 +276,8 @@ bool Cdb::load(const std::string& path, std::string* err) {
                        : scope == 'F' ? (!s.is_global && s.module == owner && s.function.empty() && s.name == name)
                                       : (s.function == owner && s.name == name);
             if (match && !s.has_addr) {
-                s.addr = (uint16_t)(s.space == 'D' ? addr / 4 : s.space == 'C' ? addr / 2 : addr);
+                s.addr = s.space == 'D' ? (rev3_ ? ((addr >> 15) << 16) | 0x8000u | (addr & 0x7fffu) : addr / 4)
+                       : s.space == 'C' ? addr / 2 : addr;
                 s.has_addr = true;
                 break;
             }
@@ -463,15 +466,16 @@ const CdbStruct* Cdb::struct_named(const std::string& name) const {
 }
 
 int Cdb::sp_top_ = 1;
+bool Cdb::rev3_ = false;
 
-uint16_t Cdb::local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot) {
+uint32_t Cdb::local_address(const CdbSymbol& s, uint32_t entry_sp, bool ra_saved, int ret_slot) {
     // an argument (offset >= 0) was pushed by the caller: from the top of
     // the stack at entry (entry_sp + sp_top_) up, past the result slot; a
     // local (offset < 0) lies below the return address the sra pushed
-    int a = (int)entry_sp + sp_top_ + s.offset;
+    int32_t a = (int32_t)entry_sp + sp_top_ + s.offset;
     if (s.offset >= 0) a += ret_slot;
-    else if (ra_saved) a -= 2;
-    return (uint16_t)(a & 0x7fff);
+    else if (ra_saved) a -= ra_bytes();
+    return (uint32_t)a & data_mask();
 }
 
 // A byte comes back in A, two bytes (int, a pointer) in IX; anything wider
@@ -486,29 +490,37 @@ int Cdb::return_slot(const CdbFunction& f) const {
 
 // ---- values ----------------------------------------------------------
 
-static std::string hex4(uint16_t v) { char b[8]; snprintf(b, sizeof b, "0x%04x", v); return b; }
+// a pointer as text: four hex digits, six on the third chip
+static std::string hex4(uint32_t v) { char b[12]; snprintf(b, sizeof b, Cdb::rev3() ? "0x%06x" : "0x%04x", v & (Cdb::rev3() ? 0xffffffu : 0xffffu)); return b; }
 
-// a byte of an object: in data, or in code space as the ldi of its ldi/ret pair
-static int read_byte(uint16_t addr, bool in_code, const Cdb::ReadData& rd, const Cdb::ReadCode& rdcode) {
+// a byte of an object: in data, or in code space as the ldi of its ldi/ret
+// pair - on the third chip as a byte of the packed constants, the pointer
+// {bank, 0x8000 | offset} naming the word {bank, offset >> 1}
+static int read_byte(uint32_t addr, bool in_code, const Cdb::ReadData& rd, const Cdb::ReadCode& rdcode) {
     if (in_code) {
         if (!rdcode) return -1;
+        if (Cdb::rev3()) {
+            uint32_t bank = (addr >> 16) & 0x7f, off = addr & 0x7fff;
+            uint16_t w = rdcode((CodeAddr)((bank << 14) | (off >> 1)));
+            return (off & 1) ? (w >> 8) & 0xff : w & 0xff;
+        }
         return rdcode((CodeAddr)((2u * (addr & 0x7fffu)) & 0x7fffu)) & 0xff;
     }
     if (!rd) return -1;
-    return rd(addr);
+    return rd(addr & Cdb::data_mask());
 }
 
-static bool read_n(uint16_t addr, int n, bool in_code, const Cdb::ReadData& rd, const Cdb::ReadCode& rdcode, uint32_t& v) {
+static bool read_n(uint32_t addr, int n, bool in_code, const Cdb::ReadData& rd, const Cdb::ReadCode& rdcode, uint32_t& v) {
     v = 0;
     for (int i = 0; i < n; i++) {
-        int b = read_byte((uint16_t)(addr + i), in_code, rd, rdcode);
+        int b = read_byte(addr + i, in_code, rd, rdcode);
         if (b < 0) return false;
         v |= (uint32_t)b << (8 * i);
     }
     return true;
 }
 
-std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const ReadData& rd, const ReadCode& rdcode, int depth) const {
+std::string Cdb::format(const CdbType& t, uint32_t addr, bool in_code, const ReadData& rd, const ReadCode& rdcode, int depth) const {
     char buf[64];
     if (depth > 3) return "...";
 
@@ -521,7 +533,7 @@ std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const Rea
             std::string s = "\"";
             bool text = true;
             for (int i = 0; i < n && i < 60; i++) {
-                int b = read_byte((uint16_t)(addr + i), in_code, rd, rdcode);
+                int b = read_byte(addr + i, in_code, rd, rdcode);
                 if (b <= 0) { text = i > 0 && b == 0; break; }
                 if (b >= 32 && b < 127) s += (char)b;
                 else { text = false; break; }
@@ -531,7 +543,7 @@ std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const Rea
         std::string s = "{";
         for (int i = 0; i < n && i < 8; i++) {
             if (i) s += ", ";
-            s += format(e, (uint16_t)(addr + i * esz), in_code, rd, rdcode, depth + 1);
+            s += format(e, addr + i * esz, in_code, rd, rdcode, depth + 1);
         }
         if (n > 8) s += ", ...";
         return s + "}";
@@ -541,17 +553,17 @@ std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const Rea
 
     if (t.is_pointer()) {
         uint32_t p;
-        if (!read_n(addr, 2, in_code, rd, rdcode, p)) return "?";
-        std::string s = hex4((uint16_t)p);
+        if (!read_n(addr, type_size(t), in_code, rd, rdcode, p)) return "?";
+        std::string s = hex4(p);
         const std::string& m = t.mods[0];
-        bool target_code = (m.size() > 1 && m[1] == 'C') || (p & 0x8000);
-        if (p & 0x8000) s += " (code)";
+        bool target_code = (m.size() > 1 && m[1] == 'C') || (p & code_tag());
+        if (p & code_tag()) s += " (code)";
         CdbType e = t.element();
         if (e.mods.empty() && e.base == "SC" && p != 0) {        // a string it points to, if it reads as one
             std::string str = " \"";
             bool text = false;
             for (int i = 0; i < 40; i++) {
-                int b = read_byte((uint16_t)((p & 0x7fff) + i), target_code, rd, rdcode);
+                int b = read_byte((p & data_mask()) + i, target_code, rd, rdcode);
                 if (b <= 0) { text = i > 0 && b == 0; break; }
                 if (b < 32 || b >= 127) break;
                 str += (char)b;
@@ -570,7 +582,7 @@ std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const Rea
         for (const auto& m : st->members) {
             if (!first) s += ", ";
             first = false;
-            s += m.name + " = " + format(m.type, (uint16_t)(addr + m.offset), in_code, rd, rdcode, depth + 1);
+            s += m.name + " = " + format(m.type, addr + m.offset, in_code, rd, rdcode, depth + 1);
         }
         return s + "}";
     }
@@ -600,7 +612,7 @@ std::string Cdb::format(const CdbType& t, uint16_t addr, bool in_code, const Rea
 
 int Cdb::type_size(const CdbType& t) const {
     if (t.size > 0) return t.size;
-    if (t.is_pointer()) return 2;
+    if (t.is_pointer()) return rev3_ && t.mods[0] != "DD" ? 3 : 2;   // the third chip: three bytes unless __near
     if (t.base.rfind("ST", 0) == 0) {
         const CdbStruct* st = struct_named(t.base.substr(2));
         int n = 0;
@@ -667,8 +679,8 @@ struct Parser {
         out = 0;
         for (int k = 0; k < n; k++) {
             int b;
-            if (v.space == 'I') b = rdp ? rdp((uint16_t)(v.addr + k)) : -1;
-            else b = read_byte((uint16_t)(v.addr + k), v.in_code, rd, rc);
+            if (v.space == 'I') b = rdp ? rdp(v.addr + k) : -1;
+            else b = read_byte(v.addr + k, v.in_code, rd, rc);
             if (b < 0) { err = "memory not readable"; return false; }
             out |= (uint32_t)b << (8 * k);
         }
@@ -682,11 +694,11 @@ struct Parser {
         }
         if (!v.type.is_pointer()) { err = "not a pointer"; return false; }
         uint32_t p = v.val;
-        if (v.is_lvalue && !read(v, 2, p)) return false;
+        if (v.is_lvalue && !read(v, cdb.type_size(v.type), p)) return false;
         bool code = v.type.mods[0].size() > 1 && v.type.mods[0][1] == 'C';
-        if (p & 0x8000) code = true;
+        if (p & Cdb::code_tag()) code = true;
         v.type = v.type.element();
-        v.addr = p & 0x7fff;
+        v.addr = p & Cdb::data_mask();
         v.in_code = code;
         v.is_lvalue = true;
         v.space = ' ';
@@ -701,9 +713,9 @@ struct Parser {
         if (take("&")) {
             if (!unary(v)) return false;
             if (!v.is_lvalue) { err = "not addressable"; return false; }
-            v.val = (v.addr & 0x7fff) | (v.in_code ? 0x8000 : 0);
+            v.val = (v.addr & Cdb::data_mask()) | (v.in_code ? Cdb::code_tag() : 0);
             v.type.mods.insert(v.type.mods.begin(), v.in_code ? "DC" : "DG");
-            v.type.size = 2;
+            v.type.size = Cdb::rev3() ? 3 : 2;
             v.is_lvalue = false;
             return true;
         }
@@ -775,17 +787,17 @@ bool Cdb::evaluate(const std::string& expr, const Frame* frame, Value& out, std:
 std::string Cdb::format_value(const Value& v, const ReadData& rd, const ReadData& rdperiph, const ReadCode& rdcode) const {
     if (!v.is_lvalue) {
         char buf[32];
-        if (v.type.is_pointer()) snprintf(buf, sizeof buf, "0x%04x", v.val & 0xffff);
-        else snprintf(buf, sizeof buf, "%u (0x%02x)", v.val, v.val);
+        if (v.type.is_pointer()) return hex4(v.val);
+        snprintf(buf, sizeof buf, "%u (0x%02x)", v.val, v.val);
         return buf;
     }
     if (v.space == 'I') {
-        uint32_t b = rdperiph ? rdperiph((uint16_t)v.addr) : 0;
+        uint32_t b = rdperiph ? rdperiph(v.addr) : 0;
         char buf[32];
         snprintf(buf, sizeof buf, "%u (0x%02x)", b, b);
         return buf;
     }
-    return format(v.type, (uint16_t)v.addr, v.in_code, rd, rdcode);
+    return format(v.type, v.addr, v.in_code, rd, rdcode);
 }
 
 // ---- frames from the registers ---------------------------------------
@@ -804,7 +816,7 @@ Cdb::Prologue Cdb::prologue(const CdbFunction& f, CodeAddr pc, const ReadCode& r
         if (!is_sra && !is_ads) break;
         p.end = a + 1;
         if (a >= pc) continue;                           // not executed yet
-        if (is_sra) { p.ra_saved = true; p.displacement += 2; }
+        if (is_sra) { p.ra_saved = true; p.displacement += ra_bytes(); }
         else p.displacement -= sext10(inst);
     }
     return p;
@@ -823,28 +835,35 @@ bool Cdb::is_bcall_return(CodeAddr ret, const ReadCode& rdcode) {
     return (call >> 5) == 0x454 && restore == 0xFE15;    // call ix ... sta [p:0x15]
 }
 
-std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max, unsigned code_bank) const {
+std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint32_t sp, uint32_t ra, const ReadData& rd, const ReadCode& rdcode, int max, unsigned code_bank) const {
     std::vector<StackFrame> out;
     const CdbFunction* f = function_at(pc);
     CodeAddr cur_pc = pc;
-    uint16_t cur_sp = sp;
+    uint32_t cur_sp = sp;
     unsigned bank = bank_of(pc, code_bank);          // the code bank the frame runs under
     for (int depth = 0; f && depth < max; depth++) {
         Prologue p = prologue(*f, depth == 0 ? cur_pc : (f->end ? f->end : (CodeAddr) 0xFFFFFFFF), rdcode);
         StackFrame fr;
         fr.pc = cur_pc;
         fr.function = f;
-        fr.entry_sp = (uint16_t)((cur_sp + p.displacement) & 0x7fff);
+        fr.entry_sp = (cur_sp + p.displacement) & data_mask();
         fr.ra_saved = p.ra_saved;
         uint16_t ret;                                     // a window address
         if (p.ra_saved) {
             if (!rd) break;
             // the sra at entry: RA's low byte on top of the stack, the high
-            // byte (with ra_cond) below it
-            uint16_t lo = (uint16_t)((fr.entry_sp + sp_top_ - 1) & 0x7fff);
-            ret = (uint16_t)(rd(lo) | ((rd((uint16_t)((lo - 1) & 0x7fff)) & 0x7f) << 8));
+            // byte (with ra_cond) below it - the third chip's middle byte
+            // and then {cond, bank} below that: the bank the caller ran in
+            uint32_t lo = (fr.entry_sp + sp_top_ - 1) & data_mask();
+            if (rev3_) {
+                ret = (uint16_t)(rd(lo) | (rd((lo - 1) & data_mask()) << 8));
+                unsigned b = rd((lo - 2) & data_mask()) & 0x7f;
+                if (b) bank = b;                          // bank 0: the current one
+            } else
+                ret = (uint16_t)(rd(lo) | ((rd((lo - 1) & data_mask()) & 0x7f) << 8));
         } else if (depth == 0) {
-            ret = ra & 0x7fff;
+            ret = (uint16_t)(ra & 0x7fff);
+            if (rev3_ && ((ra >> 16) & 0x7f)) bank = (ra >> 16) & 0x7f;
         } else {
             fr.ret_pc = 0;                               // a caller that never saved RA: the walk ends
             out.push_back(fr);
@@ -852,7 +871,7 @@ std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint16_t sp, uint16_t ra, 
         }
         fr.ret_pc = phys(ret, bank);
         int args = arg_bytes(*f);
-        if (rd && is_bcall_return(fr.ret_pc, rdcode)) {
+        if (rd && !rev3_ && is_bcall_return(fr.ret_pc, rdcode)) {
             // through ___sdcc_bcall: at the callee's entry the trampoline's
             // sra left the caller's RA on top (high byte first) and the
             // caller's bank above it; the caller's stack arguments lie above
@@ -870,7 +889,7 @@ std::vector<Cdb::StackFrame> Cdb::unwind(CodeAddr pc, uint16_t sp, uint16_t ra, 
         out.push_back(fr);
         const CdbFunction* caller = fr.ret_pc ? function_at(fr.ret_pc - 1) : nullptr;
         if (!caller || fr.ret_pc == 0) break;
-        uint16_t caller_sp = (uint16_t)((fr.entry_sp + args) & 0x7fff);
+        uint32_t caller_sp = (fr.entry_sp + args) & data_mask();
         if (caller_sp <= cur_sp && depth > 0) break;     // the stack must grow back up
         cur_pc = fr.ret_pc;
         cur_sp = caller_sp;
@@ -1026,7 +1045,7 @@ std::string Cdb::print(const std::string& expr, const Frame* frame, std::string*
     char buf[48];
     if (v.space == 'R') s += " in A";
     else if (v.space == 'I') { snprintf(buf, sizeof buf, " at peripheral 0x%02x", v.addr & 0xff); s += buf; }
-    else if (v.is_lvalue) { snprintf(buf, sizeof buf, " at %s0x%04x", v.in_code ? "code " : "", v.addr & 0x7fff); s += buf; }
+    else if (v.is_lvalue) { s += " at "; if (v.in_code) s += "code "; s += hex4(v.addr & data_mask()); }
     return s;
 }
 

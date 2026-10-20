@@ -591,7 +591,7 @@ int LisaCore::step_inst() {
         }
         bool new_ix_cond = (cond_ >> 1) & 1;
         pc_ = ix_ & PC_MASK;
-        if (rev3_) set_cb(ix_ >> 16);
+        if (rev3_ && ((ix_ >> 16) & 0x7F)) set_cb(ix_ >> 16);   // bank 0 in the pointer: the current bank (REV3.md)
         ix_ = (ix_ + 1) & amask();
         ix_cond_ = new_ix_cond;
         cond_ = 0x03;
@@ -601,7 +601,7 @@ int LisaCore::step_inst() {
     }
     if (top11 == 0x455) {  // 10001010101 = JMP IX
         pc_ = ix_ & PC_MASK;
-        if (rev3_) set_cb(ix_ >> 16);
+        if (rev3_ && ((ix_ >> 16) & 0x7F)) set_cb(ix_ >> 16);   // bank 0: the current bank
         cond_ = 0x03;
         inst_count_++;
         cycle_count_ += cycles;
@@ -1123,7 +1123,7 @@ int LisaCore::step_inst() {
         // Per RTL: base is always SP; offset is inst[1:0]. Neither C nor Z is updated.
         if ((inst >> 4) == 0xA02) {
             if (cond_ & 1) {
-                uint16_t sh_addr = (sp_ + (inst & 0x03)) & D_MASK;
+                uint32_t sh_addr = (sp_ + (inst & 0x03)) & amask();   // the stack anywhere in the 24-bit space (--rev3)
                 uint8_t mem_val = data_read(sh_addr, false, true);
                 uint8_t new_mem = (mem_val << 1) | ((a_ >> 7) & 1);
                 data_write(sh_addr, new_mem, false, true);
@@ -1140,7 +1140,7 @@ int LisaCore::step_inst() {
         // Per RTL: base is always SP; offset is inst[1:0]. Neither C nor Z is updated.
         if ((inst >> 4) == 0xA03) {
             if (cond_ & 1) {
-                uint16_t sh_addr = (sp_ + (inst & 0x03)) & D_MASK;
+                uint32_t sh_addr = (sp_ + (inst & 0x03)) & amask();   // the stack anywhere in the 24-bit space (--rev3)
                 uint8_t mem_val = data_read(sh_addr, false, true);
                 uint8_t fill;
                 if (amode_ & 0x02)
@@ -1804,7 +1804,7 @@ int LisaCore::step_inst() {
                     if (dv & 1) {
                         divisor = ((amode_ & 0x02) ? (uint16_t)(int16_t)(int8_t)a_ : (uint16_t)a_);
                     } else {
-                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false, true);
+                        uint8_t mem_val = data_read((sp_ + off) & amask(), false, true);
                         divisor = ((uint16_t)mem_val << 8) | a_;
                     }
                     if (dv & 2) {
@@ -1865,7 +1865,7 @@ int LisaCore::step_inst() {
                     if (dv & 1) {
                         divisor = ((amode_ & 0x02) ? (uint16_t)(int16_t)(int8_t)a_ : (uint16_t)a_);
                     } else {
-                        uint8_t mem_val = data_read((sp_ + off) & D_MASK, false, true);
+                        uint8_t mem_val = data_read((sp_ + off) & amask(), false, true);
                         divisor = ((uint16_t)mem_val << 8) | a_;
                     }
                     if (dv & 2) {

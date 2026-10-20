@@ -145,6 +145,7 @@ int main(int argc, char** argv) {
     if (rev3) {
         sim.core().set_rev3(true);
         sim.periph().set_rev3(true);
+        lisa::Cdb::set_rev3(true);     // the frames and pointers of sdcc --rev3
     }
     if (rev2) {
         sim.core().set_rev2(true);

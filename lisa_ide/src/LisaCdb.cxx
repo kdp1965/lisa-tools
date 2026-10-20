@@ -919,7 +919,7 @@ int CLisa::StepToLine(int mode)
         lisa::Cdb::ReadData rd = ram_reader(this, sp, m_Rev2);
         std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 1, Bank(0));
         lisa::CodeAddr ret = frames.empty() ? 0 : frames[0].ret_pc;
-        uint16_t entry_sp = frames.empty() ? sp : frames[0].entry_sp;
+        uint32_t entry_sp = frames.empty() ? sp : frames[0].entry_sp;
         const lisa::CdbFunction *fn = m_Cdb.function_at(pc);
         std::vector<lisa::CodeAddr> stops;
         bool stepping = false;
@@ -1062,7 +1062,7 @@ int CLisa::Print(int argc, char* argv[])
     uint32_t    rsp = 0;
     ReadReg(REG_SP, rsp);
     lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
-    auto rdp = [](uint16_t) -> uint8_t { return 0; };    // peripheral registers: not readable through the debugger
+    auto rdp = [](uint32_t) -> uint8_t { return 0; };    // peripheral registers: not readable through the debugger
     auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     const lisa::CdbFunction *fn;
     lisa::Cdb::Frame fr = FrameHere(&fn);
@@ -1087,7 +1087,7 @@ int CLisa::Locals(int argc, char* argv[])
     uint32_t    rsp = 0;
     ReadReg(REG_SP, rsp);
     lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
-    auto rdp = [](uint16_t) -> uint8_t { return 0; };
+    auto rdp = [](uint32_t) -> uint8_t { return 0; };
     auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     const lisa::CdbFunction *fn;
     uint32_t pc;
@@ -1134,7 +1134,7 @@ int CLisa::Backtrace(int argc, char* argv[])
     uint32_t    rsp = 0;
     ReadReg(REG_SP, rsp);
     lisa::Cdb::ReadData rd = ram_reader(this, rsp, m_Rev2);
-    auto rdp = [](uint16_t) -> uint8_t { return 0; };
+    auto rdp = [](uint32_t) -> uint8_t { return 0; };
     auto rc = [this](lisa::CodeAddr w) -> uint16_t { return CodeWord(w); };
     std::vector<lisa::Cdb::StackFrame> frames = m_Cdb.unwind(pc, sp, ra, rd, rc, 32, Bank(0));
     if (frames.empty())

@@ -31,6 +31,19 @@ SFX      = _rev2k
 CFLAGS  += --rev2 --pack-const
 REV2SIM  = --rev2
 endif
+# REV3=1: the third chip (ttsky26d REV3.md: 24-bit IX/SP/RA, 3-byte
+# pointers, a flat 8 MB) as *_rev3.ihx on lisa_sim --rev3; the second
+# chip's tests that are about its bank registers (test_dbank, test_ldk)
+# are left out, test_rev3c is its own
+ifneq ($(REV3),)
+REV2     = 1
+SFX      = _rev3
+# the stack at 2 MB in the flat 8 MB: the frames are bigger than the
+# 128-byte default has room for, and a stack above 64K is what the chip
+# will run with (a test's own --stack-loc comes after and wins)
+CFLAGS  += --rev3 --stack-loc 0x1fffff
+REV2SIM  = --rev3
+endif
 
 SELFCHECK = test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
 # long long arithmetic through the library: built, not checked - its signed
@@ -62,15 +75,19 @@ REV2CACHE += test_uartirq
 REV2CACHE += test_ldk
 # the divider's two results (the remainder in IX) and the chained step divc (RESPIN 27); REV2=1 only
 REV2CACHE += test_divc
+# the timer interrupt drifting over stores and loads that miss the cache (the chip bench with CACHE=1); REV2=1 only
+REV2CACHE += test_irqcache
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
-TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE))
+# the third chip: the second chip's tests less its data banks and KB, plus its own
+REV3TESTS = test_cachermw8 test_bank test_huge test_ldirq test_uartirq test_divc test_rev3c
+TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV3),$(REV3TESTS),$(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE)))
 
 all: $(TESTS:%=%$(SFX).ihx)
 
 # a new compiler or library rebuilds everything (a stale .ihx once made
 # 15 suites "fail")
-DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2k/lisa.lib)
+DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/build/lisa/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-cache/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev2k/lisa.lib) $(wildcard $(dir $(SDCC))../device/lib/build/lisa-rev3/lisa.lib)
 
 %$(SFX).ihx: %.c $(DEPS)
 	$(SDCC) $(CFLAGS) -o $@ $<
@@ -82,6 +99,10 @@ test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
 # the 64-bit library's frames outgrow the 128-byte RAM: stack at the top of
 # 32K (the chip testbench runs it with the cache on)
 test_divc$(SFX).ihx: test_divc.c $(DEPS)
+	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+
+# the stack above 0x4000, the other half of the split cache
+test_irqcache$(SFX).ihx: test_irqcache.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # its sp cases put a byte 0x80 above the stack, which must stay below 0x8000
@@ -132,7 +153,7 @@ export SIMFLAGS_test_uartirq
 
 check: all
 	@pass=0; fail=0; \
-	for t in $(SELFCHECK) $(if $(REV2),$(REV2CACHE)); do \
+	for t in $(SELFCHECK) $(if $(REV3),$(REV3TESTS),$(if $(REV2),$(REV2CACHE))); do \
 	  eval f=\$$SIMFLAGS_$$t; \
 	  out=$$(SIM=$(SIM) SIMFLAGS="$$f $(REV2SIM)" ./run_sim.sh $${t}$(SFX).ihx $(CYCLES)); \
 	  n=$$(printf '%s\n' "$$out" | grep -c '^ok'); \

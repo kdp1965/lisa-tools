@@ -437,7 +437,7 @@ uint32_t LisaCli::parse_code(const std::string& s) {
 }
 
 // a data byte for the source-level views (the banks go by address)
-uint8_t LisaCli::rd_data(uint16_t a) {
+uint8_t LisaCli::rd_data(uint32_t a) {
     return sim_.memory().data_read(sim_.core().data_pa(a, a >= sim_.get_state().sp));
 }
 
@@ -950,8 +950,8 @@ void LisaCli::cmd_print(const std::vector<std::string>& args) {
     lisa::Cdb::Frame fr = frame_of(0, pc, &f);
     std::string err;
     std::string s = cdb.print(expr, f ? &fr : nullptr, &err,
-                              [this](uint16_t a) { return rd_data(a); },
-                              [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); },
+                              [this](uint32_t a) { return rd_data(a); },
+                              [this](uint32_t a) { return sim_.periph().read(a & 0x1FF); },
                               [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); });
     if (s.empty())
         printf("%s\n", err.c_str());
@@ -972,8 +972,8 @@ void LisaCli::cmd_locals() {
         printf("PC=%s is not in a C function\n", caddr(pc).c_str());
         return;
     }
-    auto rd = [this](uint16_t a) { return rd_data(a); };
-    auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
+    auto rd = [this](uint32_t a) { return rd_data(a); };
+    auto rdp = [this](uint32_t a) { return sim_.periph().read(a & 0x1FF); };
     auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     printf("%s(), entry SP=%04X%s:\n", f->name.c_str(), fr.entry_sp, fr.ra_saved ? ", RA saved" : "");
     for (int pass = 0; pass < 2; pass++) {                   // arguments, then locals
@@ -995,8 +995,8 @@ void LisaCli::cmd_locals() {
 void LisaCli::cmd_bt(const std::vector<std::string>& args) {
     const lisa::Cdb& cdb = sim_.cdb();
     const auto& calls = sim_.core().call_stack();
-    auto rd = [this](uint16_t a) { return rd_data(a); };
-    auto rdp = [this](uint16_t a) { return sim_.periph().read(a & 0x1FF); };
+    auto rd = [this](uint32_t a) { return rd_data(a); };
+    auto rdp = [this](uint32_t a) { return sim_.periph().read(a & 0x1FF); };
     auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     if (args.size() > 1 && args[1] == "chip") {
         // the unwinder, each frame checked against the shadow call stack
@@ -1072,7 +1072,7 @@ void LisaCli::cmd_exits(bool into) {
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
     auto st = sim_.get_state();
-    auto rd = [this](uint16_t a) { return rd_data(a); };
+    auto rd = [this](uint32_t a) { return rd_data(a); };
     auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     uint32_t pc0 = sim_.core().pc_phys();
     auto frames = cdb.unwind(pc0, st.sp, st.ra, rd, rc, 1, sim_.periph().code_bank());
@@ -1099,7 +1099,7 @@ void LisaCli::cmd_nexthw(int mode) {
     if (!require_stopped("nexthw")) return;
     const lisa::Cdb& cdb = sim_.cdb();
     if (!cdb.loaded()) { printf("No debug info loaded\n"); return; }
-    auto rd = [this](uint16_t a) { return rd_data(a); };
+    auto rd = [this](uint32_t a) { return rd_data(a); };
     auto rc = [this](lisa::CodeAddr w) { return sim_.memory().inst_read(w); };
     long budget = 50000000;
     bool finishing = mode == 2;
@@ -1109,7 +1109,7 @@ void LisaCli::cmd_nexthw(int mode) {
         uint32_t pc0 = sim_.core().pc_phys();
         auto frames = cdb.unwind(pc0, st.sp, st.ra, rd, rc, 1, sim_.periph().code_bank());
         uint32_t ret = frames.empty() ? 0 : frames[0].ret_pc;
-        uint16_t entry_sp = frames.empty() ? st.sp : frames[0].entry_sp;
+        uint32_t entry_sp = frames.empty() ? st.sp : frames[0].entry_sp;
         std::vector<uint32_t> stops;
         if (finishing) {
             if (!ret) { printf("No return address known\n"); return; }

@@ -20,7 +20,11 @@ void main(void)
   nbfn_t g;
   volatile unsigned char s3 = sizeof(fn_t), s2 = sizeof(nbfn_t);
 
+#ifdef __SDCC_LISA_REV3
+  CHECK(1, s3 == 3 && s2 == 3);                     /* the third chip: every function pointer is 24 bits */
+#else
   CHECK(1, s3 == 3 && s2 == 2);
+#endif
   CHECK(2, CODE_BANK == 1);
   CHECK(3, h5_byte(1) == 6);                        /* A in, A out */
   CHECK(4, CODE_BANK == 1);                         /* the bank restored */

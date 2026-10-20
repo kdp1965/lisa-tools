@@ -36,6 +36,13 @@
 // bank (Cdb::phys) and a window address back with Cdb::window.
 // Otherwise: // a code-space constant's (space D) is the pointer value without its tag
 // (its bytes are ldi/ret pairs at twice that word), data addresses stay.
+//
+// The third chip (set_rev3, ttsky26d REV3.md): data addresses are 24 bits
+// (the stack anywhere in 8 MB), a saved RA is three bytes ({cond, bank,
+// 0, pc}: the function's bank rides in it), a pointer is three bytes with
+// the code-space marker in bit 23 - a constant's is {1, bank, 0x8000 |
+// byte offset} of the packed constants, read from the word {bank, offset
+// >> 1} - and a __near pointer two.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -71,7 +78,7 @@ struct CdbSymbol {
     bool on_stack = false;
     int offset = 0;                     // stack offset at entry (space B)
     std::vector<std::string> regs;      // space R: the registers
-    uint16_t addr = 0;
+    uint32_t addr = 0;                  // a data address, a code word (C), a constant's pointer value (D)
     bool has_addr = false;
 };
 
@@ -107,7 +114,7 @@ public:
 
     // the code banks: a window address (a PC, RA, a jal target) as a
     // physical word under code bank `bank`, and back
-    static CodeAddr phys(uint16_t pc, unsigned bank) { pc &= 0x7fff; return pc < 0x4000 ? pc : ((CodeAddr)(bank & 63) << 14) | (pc & 0x3fff); }
+    static CodeAddr phys(uint16_t pc, unsigned bank) { pc &= 0x7fff; return pc < 0x4000 ? pc : ((CodeAddr)(bank & 127) << 14) | (pc & 0x3fff); }
     static uint16_t window(CodeAddr a) { return a < 0x4000 ? (uint16_t)a : (uint16_t)(0x4000 | (a & 0x3fff)); }
     static unsigned bank_of(CodeAddr a, unsigned dflt) { return a < 0x4000 ? dflt : (unsigned)(a >> 14); }
     // where a transfer to window address t made from physical `from` lands: the same bank
@@ -139,20 +146,26 @@ public:
     // The caller's arguments sit above the return address - above the
     // slot it reserves for a result wider than two bytes or a struct
     // (ret_slot bytes, see return_slot) - and the locals below it.
-    static uint16_t local_address(const CdbSymbol& s, uint16_t entry_sp, bool ra_saved, int ret_slot = 0);
+    static uint32_t local_address(const CdbSymbol& s, uint32_t entry_sp, bool ra_saved, int ret_slot = 0);
     // The offset of the byte on top of the stack: 1 on TT07 (a push writes
     // at SP and decrements), 0 on the second chip (it decrements first; the
     // code is compiled with sdcc --rev2, lisa_sim --rev2 runs it)
     static void set_sp_top(int top) { sp_top_ = top; }
     static int  sp_top() { return sp_top_; }
+    // The third chip (sdcc --rev3, lisa_sim --rev3): see the top of this file
+    static void set_rev3(bool on) { rev3_ = on; if (on) sp_top_ = 0; }
+    static bool rev3() { return rev3_; }
+    static int  ra_bytes() { return rev3_ ? 3 : 2; }                       // what sra pushes
+    static uint32_t data_mask() { return rev3_ ? 0x7fffffu : 0x7fffu; }    // the address bits of a pointer
+    static uint32_t code_tag() { return rev3_ ? 0x800000u : 0x8000u; }     // the code-space marker in a pointer
     int return_slot(const CdbFunction& f) const;
 
     // a value as text: reads data bytes through rd, code-space constants
     // (the ldi/ret pairs of a code pointer) through rdcode (the instruction
     // word at an address), both optional
-    using ReadData = std::function<uint8_t(uint16_t)>;
+    using ReadData = std::function<uint8_t(uint32_t)>;    // a data byte (the third chip: a 24-bit address)
     using ReadCode = std::function<uint16_t(CodeAddr)>;   // the instruction word at a physical address
-    std::string format(const CdbType& t, uint16_t addr, bool in_code, const ReadData& rd, const ReadCode& rdcode, int depth = 0) const;
+    std::string format(const CdbType& t, uint32_t addr, bool in_code, const ReadData& rd, const ReadCode& rdcode, int depth = 0) const;
     int type_size(const CdbType& t) const;              // a struct's from its members
 
     // An expression over the program's variables: a name, with *, &,
@@ -161,7 +174,7 @@ public:
     // plus one for the peripheral registers (space I).
     struct Frame {
         std::string function;       // as CdbFunction::name
-        uint16_t entry_sp = 0x7fff;
+        uint32_t entry_sp = 0x7fff;
         bool ra_saved = false;
         int ret_slot = 0;           // return_slot() of the function
         uint8_t a = 0;              // the register a byte argument arrives in
@@ -205,12 +218,12 @@ public:
     struct StackFrame {
         CodeAddr pc;                    // frame 0: the PC; others: the return address into them
         const CdbFunction* function;
-        uint16_t entry_sp;
+        uint32_t entry_sp;
         bool ra_saved;
         CodeAddr ret_pc;                // where this frame returns to (past a trampoline: into the caller)
         bool via_bcall = false;         // ... through ___sdcc_bcall
     };
-    std::vector<StackFrame> unwind(CodeAddr pc, uint16_t sp, uint16_t ra, const ReadData& rd, const ReadCode& rdcode, int max = 32, unsigned code_bank = 1) const;
+    std::vector<StackFrame> unwind(CodeAddr pc, uint32_t sp, uint32_t ra, const ReadData& rd, const ReadCode& rdcode, int max = 32, unsigned code_bank = 1) const;
     // ret is the word after a `call ix` in ___sdcc_bcall (its signature: the
     // bank restored two words on, sta [p:0x15])
     static bool is_bcall_return(CodeAddr ret, const ReadCode& rdcode);
@@ -249,6 +262,7 @@ public:
 private:
     bool loaded_ = false;
     static int sp_top_;
+    static bool rev3_;
     std::string path_, dir_;
     std::vector<CdbLine> lines_;        // sorted by address
     std::vector<CdbFunction> functions_;// sorted by address

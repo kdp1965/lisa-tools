@@ -141,7 +141,11 @@ int main(void)
     CHECK(23, ige == 0 && cge == 0 && ugt == 1 && ugt2 == 0 && ule == 0 && ule2 == 1 && ne == 1 && ne2 == 0);
   }
   {
+#ifdef __SDCC_LISA_REV3
+    static char nb[4];          /* the third chip: a __near pointer reaches the first 64K, not a stack above it */
+#else
     char nb[4];
+#endif
     strcpy(nb, "abc");
     CHECK(24, near_walk(nb) == 4);
   }
