@@ -762,10 +762,39 @@ int CLisa::Rev2(int argc, char* argv[])
     return 0;
 }
 
+// rev3 on|off: the third chip (ttsky26d twenty-four-bit, REV3.md) - SP, IX
+// and RA 24 bits through the debug port's upper bytes (0x39 / 0x38 / 0x3a
+// beside registers 3 / 5 / 4), RAM beyond 32K through 0x3c, three-byte
+// pairs and a return address with its code bank; the .cdb reader follows
+// (lisa::Cdb::set_rev3).  rev3 implies rev2's stack convention.  Connect
+// sets it from register 0, which reports the data width (23 there).
+int CLisa::Rev3(int argc, char* argv[])
+{
+    if (argc >= 2)
+    {
+        if (strcmp(argv[1], "on") && strcmp(argv[1], "off"))
+        {
+            Printf("Usage: rev3 [on|off]");
+            return 1;
+        }
+        m_Rev3 = strcmp(argv[1], "on") == 0;
+        if (m_Rev3)
+            m_Rev2 = true;
+        lisa::Cdb::set_rev3(m_Rev3);
+        lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
+        m_pParent->WriteUIPreferences();
+    }
+    Printf("rev3 %s: %s", m_Rev3 ? "on" : "off",
+           m_Rev3 ? "the third chip, 24-bit SP / IX / RA, the flat 8 MB; programs built with sdcc --rev3"
+                  : "a 15-bit chip (rev2 says which)");
+    return 0;
+}
+
 void CLisa::SaveWatchItems(FILE *fd)
 {
     fprintf(fd, "LISA_SETUP=%s\n", m_Setup.Serialize().c_str());
     fprintf(fd, "LISA_REV2=%d\n", m_Rev2 ? 1 : 0);
+    fprintf(fd, "LISA_REV3=%d\n", m_Rev3 ? 1 : 0);
 }
 
 void CLisa::RestoreOtherPref(char *pPref, char *pStr)
@@ -779,6 +808,14 @@ void CLisa::RestoreOtherPref(char *pPref, char *pStr)
     else if (strcmp(pPref, "LISA_REV2") == 0)
     {
         m_Rev2 = atoi(pStr) != 0;
+        lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
+    }
+    else if (strcmp(pPref, "LISA_REV3") == 0)
+    {
+        m_Rev3 = atoi(pStr) != 0;
+        lisa::Cdb::set_rev3(m_Rev3);
+        if (m_Rev3)
+            m_Rev2 = true;
         lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
     }
 }
@@ -804,12 +841,21 @@ void CLisa::DetectRevision(void)
     bool rev2 = major >= '2';
     size_t end = m_Response.find_first_of("\r\n", pos);
     std::string ver = m_Response.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
-    if (rev2 != m_Rev2)
+    // the third chip answers lisav2.0 too: register 0 reports the data
+    // width in bits 15:11 - 23 there, 15 on the second chip (REV3.md)
+    bool rev3 = false;
+    uint32_t st = 0;
+    if (rev2 && ReadReg(REG_STATUS, st) != -1)
+        rev3 = ((st >> 11) & 0x1f) == 23;
+    if (rev2 != m_Rev2 || rev3 != m_Rev3)
     {
         m_Rev2 = rev2;
+        m_Rev3 = rev3;
+        lisa::Cdb::set_rev3(m_Rev3);
         lisa::Cdb::set_sp_top(m_Rev2 ? 0 : 1);
         m_pParent->WriteUIPreferences();
     }
-    Printf("Debugger %s: %s, rev2 %s", ver.c_str(),
-           rev2 ? "the second chip" : "the TT07 chip", m_Rev2 ? "on" : "off");
+    Printf("Debugger %s: %s, rev2 %s, rev3 %s", ver.c_str(),
+           rev3 ? "the third chip" : rev2 ? "the second chip" : "the TT07 chip",
+           m_Rev2 ? "on" : "off", m_Rev3 ? "on" : "off");
 }

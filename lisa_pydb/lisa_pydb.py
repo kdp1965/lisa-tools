@@ -121,16 +121,56 @@ class LisaPyDb:
       return self.readReg(2)
 
    # =============================================
+   # The third chip (ttsky26d REV3.md): SP, RA and IX are 24 bits - registers
+   # 3 / 4 / 5 read and write their low 16 bits, 0x39 / 0x3a / 0x38 the upper
+   # bytes ({cond, 22:16} for IX and RA) - and the debugger's data address
+   # has its bits 22:15 in 0x3c (register 7 keeps {periph, 14:0}; the address
+   # steps through 0x3c after each access).  Register 0 reports the data
+   # width in bits 15:11: 23 there, 15 on the second chip.
+   # =============================================
+   REG_IXH, REG_SPH, REG_RAH, REG_DADDRH = 0x38, 0x39, 0x3a, 0x3c
+
+   def isRev3(self):
+      if not hasattr(self, '_rev3'):
+         self._rev3 = ((self.readReg(0) >> 11) & 0x1f) == 23
+      return self._rev3
+
+   # The debugger's data port address: a 24-bit data address, or a
+   # peripheral register (bit 15 of register 7, the upper bits 0)
+   def setDataAddr(self, a:int, periph=False):
+      if self.isRev3():
+         self.writeReg(self.REG_DADDRH, 0 if periph else (a >> 15) & 0xff)
+         self.writeReg(7, (0x8000 | (a & 0x7fff)) if periph else (a & 0x7fff))
+      else:
+         self.writeReg(7, (0x8000 | (a & 0x7fff)) if periph else (a & 0xffff))
+
+   def readIX(self):
+      v = self.readReg(5)
+      return v | (self.readReg(self.REG_IXH) << 16) if self.isRev3() else v
+
+   def writeIX(self, val:int):
+      self.writeReg(5, val & 0xffff)
+      if self.isRev3():
+         self.writeReg(self.REG_IXH, (val >> 16) & 0xff)
+
+   def readRA(self):
+      v = self.readReg(4)
+      return v | (self.readReg(self.REG_RAH) << 16) if self.isRev3() else v
+
+   # =============================================
    # Set the lisa core SP value
    # =============================================
    def writeSP(self, val:int):
-      self.writeReg(3, val)
+      self.writeReg(3, val & 0xffff)
+      if self.isRev3():
+         self.writeReg(self.REG_SPH, (val >> 16) & 0x7f)
 
    # =============================================
    # Get the lisa core SP value
    # =============================================
    def readSP(self):
-      return self.readReg(3)
+      v = self.readReg(3)
+      return v | ((self.readReg(self.REG_SPH) & 0x7f) << 16) if self.isRev3() else v
 
    # =============================================
    # Read all opcodes from the HEX file
@@ -240,7 +280,10 @@ class LisaPyDb:
          self.halt()
          d = self.readRam(a, n, b)
          for k in range(0, n, 16):
-            print(f'{b:X}:{a + k:04X}: ' + ' '.join(f'{x:02X}' for x in d[k:k + 16]))
+            if self.isRev3():
+               print(f'{a + k:06X}: ' + ' '.join(f'{x:02X}' for x in d[k:k + 16]))
+            else:
+               print(f'{b:X}:{a + k:04X}: ' + ' '.join(f'{x:02X}' for x in d[k:k + 16]))
          return
       try:
          a = int(v[0],16)
@@ -290,7 +333,12 @@ class LisaPyDb:
 
       # Read the SP value
       sp = self.readSP()
-      sp = sp & 0xFFF0
+      sp = sp & 0xFFFFF0
+      if self.isRev3():
+         # the third chip: a flat 24-bit address, read through 0x3c
+         data = self.readRam(sp, 16)
+         print(f'{sp:06X}: ' + ' '.join(f'{d:02X}' for d in data))
+         return
 
       # The stack is SP-relative data, in the stack bank; the debug port
       # reads through the data bank, so dump it with the data bank set to
@@ -356,41 +404,54 @@ class LisaPyDb:
    BANK_REGS = {'code': 0x15, 'data': 0x16, 'stack': 0x17}
    BANK_MASK = {'code': 63, 'data': 31, 'stack': 15}   # 64 code banks, 32 granules of 8K, 16 stack banks (RESPIN 28)
 
-   def readByte(self, a):
-      self.writeReg(7, a)
+   # a data byte (a 24-bit address on the third chip), or with periph=True
+   # a peripheral register
+   def readByte(self, a, periph=False):
+      self.setDataAddr(a, periph)
       v = self.readReg(6)
       self.sio.readline()
       return v & 0xff
 
-   def writeByte(self, a, v):
-      self.writeReg(7, a)
+   def writeByte(self, a, v, periph=False):
+      self.setDataAddr(a, periph)
       self.writeReg(6, v & 0xff)
 
+   # the third chip has the code bank only (7 bits): no data or stack bank
+   def bankRegs(self):
+      if self.isRev3():
+         return {'code': 0x15}, {'code': 127}
+      return self.BANK_REGS, self.BANK_MASK
+
    def readBanks(self):
-      banks = {k: self.readByte(0x8000 | r) & self.BANK_MASK[k] for k, r in self.BANK_REGS.items()}
-      self.writeReg(7, 0)
+      regs, masks = self.bankRegs()
+      banks = {k: self.readByte(r, periph=True) & masks[k] for k, r in regs.items()}
+      self.setDataAddr(0)
       return banks
 
    def setBank(self, which, n):
-      self.writeByte(0x8000 | self.BANK_REGS[which], n & self.BANK_MASK[which])
-      self.writeReg(7, 0)
+      regs, masks = self.bankRegs()
+      if which not in regs:
+         print(f'the third chip has no {which} bank')
+         return
+      self.writeByte(regs[which], n & masks[which], periph=True)
+      self.setDataAddr(0)
 
    # bytes of data RAM through the cache, an address in the data window
    # 0x2000-0x3fff in granule `bank` (None: the one switched in); the data
    # bank is put back after (above 0x4000 is the stack bank's, RESPIN 28)
    def readRam(self, addr, n, bank=None):
       old = None
-      if bank is not None and addr < 0x4000 and addr + n > 0x2000:
-         old = self.readByte(0x8016) & 31
-         self.writeByte(0x8016, bank)
-      self.writeReg(7, addr)
+      if bank is not None and not self.isRev3() and addr < 0x4000 and addr + n > 0x2000:
+         old = self.readByte(0x16, periph=True) & 31
+         self.writeByte(0x16, bank, periph=True)
+      self.setDataAddr(addr)
       out = []
       for _ in range(n):
          out.append(self.readReg(6) & 0xff)
          self.sio.readline()
       if old is not None:
-         self.writeByte(0x8016, old)
-      self.writeReg(7, 0)
+         self.writeByte(0x16, old, periph=True)
+      self.setDataAddr(0)
       return out
 
    # =============================================
@@ -627,7 +688,7 @@ def parseArgs():
       dest = 'data',
       type = str,
       default = "",
-      help='Read data at given address,length (hex address): through the debug QSPI path to the SRAM; bank:addr,len reads through the core and the cache in that data bank.')
+      help='Read data at given address,length (hex address): through the debug QSPI path to the SRAM; bank:addr,len reads through the core and the cache in that data bank (the third chip: any 24-bit address, the bank ignored).')
   parser.add_argument("--iwidth",
       dest = 'iwidth',
       type = int,
@@ -731,7 +792,7 @@ def main():
    # Test if resuesting print of SP
    if args.sp:
       sp = db.readSP()
-      print(f'SP: {sp:4X}')
+      print(f'SP: {sp:6X}' if db.isRev3() else f'SP: {sp:4X}')
 
    # Test if resuesting halt
    if args.halt:
@@ -748,7 +809,10 @@ def main():
    if args.banks:
       db.halt()
       b = db.readBanks()
-      print(f"Banks: code {b['code']:X}  data {b['data']:X}  stack {b['stack']:X}")
+      if db.isRev3():
+         print(f"Banks: code {b['code']:X}  (the third chip: no data or stack banks)")
+      else:
+         print(f"Banks: code {b['code']:X}  data {b['data']:X}  stack {b['stack']:X}")
 
    # Test for request for data SRAM dump
    if args.data != "":

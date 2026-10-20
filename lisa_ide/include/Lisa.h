@@ -184,6 +184,7 @@ private:
     bool                EnableSpiRam(const LisaSetupCfg& cfg, std::string& why);
     int                 SpiRam(int argc, char* argv[]);
     int                 Rev2(int argc, char* argv[]);
+    int                 Rev3(int argc, char* argv[]);
     void                DetectRevision(void);
     void                OpenSetupTab(void);
     void                CloseSetupTab(void);
@@ -194,7 +195,9 @@ private:
     bool                WantAllKeys(void) override { return IsSetupTab(); }
     void                SaveWatchItems(FILE *fd) override;
     void                RestoreOtherPref(char *pPref, char *pStr) override;
-    int                 ReadRam(uint16_t addr, uint8_t *buf, int n, int bank = -1);
+    int                 ReadRam(uint32_t addr, uint8_t *buf, int n, int bank = -1);
+    void                SetDataAddr(uint32_t addr, bool periph = false);   // the debugger's data port address: 24 bits on the third chip (0x3c)
+    uint32_t            DataMask(void) const { return m_Rev3 ? 0x7fffff : 0x7fff; }
     // the second chip's bank registers (ttsky26d RESPIN 22): 0 code, 1 data,
     // 2 stack; 1 on TT07 (no banks)
     unsigned            Bank(int which);
@@ -222,7 +225,7 @@ private:
     int                 PCLineOf(lisa_src_t *pSrc, uint32_t pc);
     bool                IsBreakLine(lisa_src_t *pSrc, int line);
     lisa::Cdb::Frame    FrameHere(const lisa::CdbFunction **ppFn, uint32_t *pPc = NULL);
-    static std::vector<lisa::CodeAddr> NextPCs(uint16_t op, lisa::CodeAddr pc, uint16_t ra, uint16_t ix, unsigned code_bank);
+    static std::vector<lisa::CodeAddr> NextPCs(uint16_t op, lisa::CodeAddr pc, uint32_t ra, uint32_t ix, unsigned code_bank, bool rev3 = false);
 
     // LISA-specific interface
     int                 ReadReg(uint8_t reg, uint32_t &value);
@@ -292,6 +295,7 @@ private:
     std::string         m_OutLine;          // the program's output, a partial line
     bool                m_ImagesOnly;       // file completion offers program images only
     bool                m_Rev2;             // the second chip's stack convention (rev2 on|off, saved in .tui_prefs)
+    bool                m_Rev3;             // the third chip (REV3.md): 24-bit SP / IX / RA through the debug port's upper bytes (rev3 on|off; register 0 says at connect)
     LisaSetupCfg        m_Setup;            // applied on connect, saved in .tui_prefs
     LisaSetupCfg        m_SetupEdit;        // the SETUP tab's copy until OK
     lisa_src_t        * m_pSetupSrc;

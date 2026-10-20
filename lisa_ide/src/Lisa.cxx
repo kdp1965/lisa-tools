@@ -49,6 +49,7 @@ const LisaCmd_t CLisa::m_TuiCmds[] =
     {"setup",   0, 1, &CLisa::Setup,   "[apply|defaults]", "The SETUP tab: chip selects, bases, SPI/QSPI, cache, muxes"},
     {"spiram",  1, 1, &CLisa::SpiRam,  "on|off",        "The data cache on the RP2040's emulated SPI RAM (CS1), or off"},
     {"rev2",    0, 1, &CLisa::Rev2,    "[on|off]",      "The second chip's stack convention (SP at the top byte) for the source level; set at connect from the debugger version"},
+    {"rev3",    0, 1, &CLisa::Rev3,    "[on|off]",      "The third chip: 24-bit SP, IX and RA through the debug port's upper bytes, the flat 8 MB; set at connect from register 0"},
     {"help",    0, 1, &CLisa::Help,    "[command]",     "List the commands, or explain one"},
     {nullptr,   0, 0, nullptr,         nullptr,         nullptr}
 };
@@ -134,6 +135,7 @@ CLisa::CLisa(CTui *pTui)
     m_PrefsFile       = ".tui_prefs";
     m_LastCodeBank    = 1;
     m_Rev2            = false;              // TT07 until `rev2 on` (kept in .tui_prefs)
+    m_Rev3            = false;              // the third chip: `rev3 on`, or register 0 at connect
     m_pAttachedSrc    = NULL;
     m_Running         = -1;
     m_HaltDetected    = 0;
@@ -580,6 +582,17 @@ void CLisa::DrawWatchWindow(WINDOW* pWnd, int topLine)
             {
                 value &= 0xFF;
                 snprintf(valStr, sizeof(valStr), "0x%02X", value);
+            }
+            else if (m_Rev3 && (regs[i] == REG_SP || regs[i] == REG_IX || regs[i] == REG_RA))
+            {
+                // the third chip: the upper byte (REV3.md), the condition bit of IX / RA shown as ' c'
+                uint32_t hi = 0;
+                ReadReg(regs[i] == REG_SP ? 0x39 : regs[i] == REG_IX ? 0x38 : 0x3a, hi);
+                value = (value & 0xffff) | ((hi & 0xff) << 16);
+                if (regs[i] == REG_SP)
+                    snprintf(valStr, sizeof(valStr), "0x%06X", value & 0x7fffff);
+                else
+                    snprintf(valStr, sizeof(valStr), "0x%06X%s", value & 0x7fffff, (value & 0x800000) ? " c" : "");
             }
             else
                 snprintf(valStr, sizeof(valStr), "0x%04X", value);
@@ -2049,6 +2062,13 @@ static const struct { const char *name; const char *text; } gHelpDetail[] =
                 "  next, finish) counts frames from there. Programs are built with\n"
                 "  sdcc --rev2. off: TT07, SP one below the top (1(sp)). Kept in .tui_prefs;\n"
                 "  without an argument shows the setting. The chip cannot be asked."},
+    {"rev3",    "rev3 [on|off]   (connect sets it: register 0 reports the data width, 23 on the third chip)\n"
+                "  on: the chip is the third one (ttsky26d twenty-four-bit, REV3.md): SP, IX and\n"
+                "  RA are 24 bits, read through 0x39 / 0x38 / 0x3a with registers 3 / 5 / 4,\n"
+                "  the data space is the flat 8 MB (RAM beyond 32K through 0x3c), the pairs\n"
+                "  three bytes and a return address carries its code bank; the .cdb reader\n"
+                "  (locals, print, bt, next, finish) follows (programs built with sdcc --rev3).\n"
+                "  rev3 implies rev2's stack convention. Kept in .tui_prefs."},
     {"debug",   "debug <prog.ihx>\n"
                 "  Loads the program image and the .cdb that `sdcc -mlisa --debug` writes\n"
                 "  beside it, opens each C source in a tab (-> marks the PC's line, * a\n"

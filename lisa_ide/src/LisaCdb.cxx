@@ -37,11 +37,34 @@ The chip
 // detour), and an address at or above 0x4000 is in the data bank; bank >= 0
 // switches that bank in for the read and back after (RESPIN 22).  The
 // debugger's data address is left at 0 afterwards.
-int CLisa::ReadRam(uint16_t addr, uint8_t *buf, int n, int bank)
+// The debugger's data port address: register 7 is {periph, 14:0}; the third
+// chip keeps bits 22:15 in 0x3c (REV3.md), stepped with the address after
+// each access, so a run of reads crosses 32K boundaries by itself
+void CLisa::SetDataAddr(uint32_t addr, bool periph)
+{
+    if (m_Rev3)
+        WriteReg(0x3c, periph ? 0 : (addr >> 15) & 0xff);
+    WriteReg(7, periph ? (0x8000 | (addr & 0x7fff)) : (addr & 0x7fff));
+}
+
+int CLisa::ReadRam(uint32_t addr, uint8_t *buf, int n, int bank)
 {
     uint32_t    ix, v;
     int         got = 0;
 
+    if (m_Rev3)
+    {
+        // the flat 8 MB: no banks, the address through 0x3c
+        SetDataAddr(addr);
+        for (int i = 0; i < n; i++)
+        {
+            if (ReadReg(6, v) == -1)
+                break;
+            buf[got++] = v & 0xff;
+        }
+        SetDataAddr(0);
+        return got;
+    }
     if (m_Rev2)
     {
         int old = -1;
@@ -88,20 +111,22 @@ unsigned CLisa::Bank(int which)
 
     if (!m_Rev2)
         return 1;
-    WriteReg(7, 0x8015 + which);
+    if (m_Rev3 && which != 0)
+        return 0;                               // the third chip has the code bank only
+    SetDataAddr(0x15 + which, true);
     if (ReadReg(6, v) == -1)
         v = 1;
-    WriteReg(7, 0);
-    return v & (which == 0 ? 63 : 15);       // the code bank is 6 bits, data / stack 4
+    SetDataAddr(0);
+    return v & (which == 0 ? (m_Rev3 ? 127 : 63) : 15);   // the code bank is 6 bits (7 on the third chip), data / stack 4
 }
 
 void CLisa::SetBank(int which, unsigned n)
 {
-    if (!m_Rev2)
+    if (!m_Rev2 || (m_Rev3 && which != 0))
         return;
-    WriteReg(7, 0x8015 + which);
-    WriteReg(6, n & (which == 0 ? 63 : 15));
-    WriteReg(7, 0);
+    SetDataAddr(0x15 + which, true);
+    WriteReg(6, n & (which == 0 ? (m_Rev3 ? 127 : 63) : 15));
+    SetDataAddr(0);
 }
 
 // The PC register is the window address; the code bank says which bank a
@@ -128,8 +153,20 @@ std::string CLisa::CAddr(lisa::CodeAddr a)
 
 bool CLisa::ReadCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, uint32_t& acc)
 {
-    return ReadReg(REG_PC, pc) != -1 && ReadReg(REG_SP, sp) != -1 && ReadReg(REG_RA, ra) != -1 &&
-           ReadReg(REG_IX, ix) != -1 && ReadReg(REG_ACC, acc) != -1;
+    if (!(ReadReg(REG_PC, pc) != -1 && ReadReg(REG_SP, sp) != -1 && ReadReg(REG_RA, ra) != -1 &&
+          ReadReg(REG_IX, ix) != -1 && ReadReg(REG_ACC, acc) != -1))
+        return false;
+    if (m_Rev3)
+    {
+        // the upper bytes (REV3.md): SP's bits 22:16, {cond, 22:16} for IX and RA
+        uint32_t sph, rah, ixh;
+        if (ReadReg(0x39, sph) == -1 || ReadReg(0x3a, rah) == -1 || ReadReg(0x38, ixh) == -1)
+            return false;
+        sp = (sp & 0xffff) | ((sph & 0x7f) << 16);
+        ra = (ra & 0xffff) | ((rah & 0xff) << 16);
+        ix = (ix & 0xffff) | ((ixh & 0xff) << 16);
+    }
+    return true;
 }
 
 // an instruction word: from the image `debug` loaded, else from the flash
@@ -150,9 +187,14 @@ uint16_t CLisa::CodeWord(lisa::CodeAddr pc)
 // may be skipped altogether.  Physical addresses: a window target is in
 // pc's bank, or under code_bank from the common area (where call ix and
 // ret land after ___sdcc_bcall has switched the bank).
-std::vector<lisa::CodeAddr> CLisa::NextPCs(uint16_t op, lisa::CodeAddr pc, uint16_t ra, uint16_t ix, unsigned code_bank)
+std::vector<lisa::CodeAddr> CLisa::NextPCs(uint16_t op, lisa::CodeAddr pc, uint32_t ra, uint32_t ix, unsigned code_bank, bool rev3)
 {
-    auto        at = [&](uint32_t w) { return lisa::Cdb::phys((uint16_t) (w & 0x7fff), pc >= 0x4000 ? (unsigned) (pc >> 14) : code_bank); };
+    unsigned    cur = pc >= 0x4000 ? (unsigned) (pc >> 14) : code_bank;
+    auto        at = [&](uint32_t w) { return lisa::Cdb::phys((uint16_t) (w & 0x7fff), cur); };
+    // the third chip: a return address carries its code bank in bits 22:16,
+    // and call ix / jmp ix take the bank from IX, 0 keeping the current one
+    auto        ret_at = [&](uint32_t r) { return rev3 ? lisa::Cdb::phys((uint16_t) (r & 0x7fff), (r >> 16) & 0x7f) : at(r); };
+    auto        ix_at = [&](uint32_t x) { return rev3 && ((x >> 16) & 0x7f) ? lisa::Cdb::phys((uint16_t) (x & 0x7fff), (x >> 16) & 0x7f) : at(x); };
     lisa::CodeAddr seq = pc + 1;
     int         rel = op & 0x7ff;
 
@@ -165,13 +207,15 @@ std::vector<lisa::CodeAddr> CLisa::NextPCs(uint16_t op, lisa::CodeAddr pc, uint1
     if (t5 == 0x16 || t5 == 0x15 || t5 == 0x17)
         return { relpc, seq };                                                  // br / bnz / bz
     if (t6 == 0x23 || t9 == 0x114 || t10 == 0x22c || t10 == 0x22e)
-        return { at(ra), seq };                                                 // ret #k / ret / rc / rz
+        return { ret_at(ra), seq };                                             // ret #k / ret / rc / rz
     if (t10 == 0x22d)
         return { seq };                                                         // rets: IA is not readable
     if (t11 == 0x454 || t11 == 0x455)
-        return { at(ix), seq };                                                 // call ix / jmp ix
+        return { ix_at(ix), seq };                                              // call ix / jmp ix
     if ((op >> 4) == 0xa18)
         return { pc + 2 };                                                      // ldx: the next word is its operand
+    if (op == 0xa190)
+        return { pc + 3 };                                                      // ldxf: the next two words (REV3.md)
     return { seq };
 }
 
@@ -373,7 +417,7 @@ bool CLisa::LogicalCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, 
     if (it != m_Shift.end())
     {
         pc = it->second.first;
-        sp = (sp - it->second.second) & 0x7fff;
+        sp = (sp - it->second.second) & DataMask();
         if (pShifted)
             *pShifted = true;
     }
@@ -387,14 +431,14 @@ bool CLisa::LogicalCore(uint32_t& pc, uint32_t& sp, uint32_t& ra, uint32_t& ix, 
 // not.
 long CLisa::StepInsn(void)
 {
-    uint32_t    pc, ra, ix, saved[4];
+    uint32_t    pc, ra, ix, sp_, acc_, saved[4];
 
-    if (ReadReg(REG_PC, pc) == -1 || ReadReg(REG_RA, ra) == -1 || ReadReg(REG_IX, ix) == -1)
+    if (!ReadCore(pc, sp_, ra, ix, acc_))
         return -1;
     unsigned cb = Bank(0);
     pc = lisa::Cdb::phys((uint16_t) pc, cb);
     uint16_t op = CodeWord(pc);
-    std::vector<lisa::CodeAddr> t = NextPCs(op, pc, ra & 0x7fff, ix & 0x7fff, cb);
+    std::vector<lisa::CodeAddr> t = NextPCs(op, pc, ra, ix, cb, m_Rev3);
     // a store runs on with what follows it; the real PC is reported (not
     // remembered in m_Shift: that is for stops meant at a line)
     bool past = false;
@@ -720,12 +764,12 @@ void CLisa::ShowLocation(bool activate)
 struct RamReader
 {
     CLisa      *l;
-    uint16_t    sp;
+    uint32_t    sp;
     int         sb;             // the stack bank when it differs from the data bank, else -1
-    uint16_t    base = 0;
+    uint32_t    base = 0;       // the third chip: 24-bit addresses
     int         len = 0, bank = -2;
     uint8_t     buf[16];
-    uint8_t operator()(uint16_t a)
+    uint8_t operator()(uint32_t a)
     {
         int b = (sb >= 0 && a >= sp && a >= 0x4000) ? sb : -1;
         if (!(len && b == bank && a >= base && a < base + len))
@@ -743,9 +787,9 @@ RamReader ram_reader(CLisa *l, uint32_t sp, bool rev2)
 {
     RamReader r;
     r.l = l;
-    r.sp = (uint16_t) (sp & 0x7fff);
+    r.sp = sp & (lisa::Cdb::rev3() ? 0x7fffff : 0x7fff);
     r.sb = -1;
-    if (rev2 && r.sp >= 0x3f00)
+    if (rev2 && !lisa::Cdb::rev3() && r.sp >= 0x3f00)
     {
         unsigned sb = l->Bank(2), db = l->Bank(1);
         if (sb != db)
