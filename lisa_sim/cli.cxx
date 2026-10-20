@@ -446,7 +446,7 @@ void LisaCli::cmd_mem(const std::vector<std::string>& args) {
         printf("Usage: mem <addr> [length]\n");
         return;
     }
-    uint32_t addr = parse_addr(args[1]) & 0x3FFFF;
+    uint32_t addr = parse_addr(args[1]) & 0x7FFFFF;
     int len = 16;
     if (args.size() > 2) len = (int)parse_number(args[2]);
     if (len <= 0) len = 16;
@@ -474,7 +474,7 @@ void LisaCli::cmd_memw(const std::vector<std::string>& args) {
         printf("Usage: memw <addr> <value>\n");
         return;
     }
-    uint32_t addr = parse_addr(args[1]) & 0x3FFFF;
+    uint32_t addr = parse_addr(args[1]) & 0x7FFFFF;
     uint8_t val = parse_addr(args[2]) & 0xFF;
     sim_.memory().data_write(data_phys(addr), val);
     printf("  [%04X] = %02X\n", addr, val);
@@ -516,7 +516,8 @@ void LisaCli::cmd_bpl() {
         for (int i = 0; i < n; i++) {
             uint16_t inst = sim_.memory().inst_read(addrs[i]);
             uint16_t next = sim_.memory().inst_read(addrs[i] + 1);
-            printf("  [%d] %s: %-24s", i, caddr(addrs[i]).c_str(), lisa_disasm(inst, lisa::Cdb::window(addrs[i]), next).c_str());
+            uint16_t next2 = sim_.memory().inst_read(addrs[i] + 2);   // ldxf: two words follow
+            printf("  [%d] %s: %-24s", i, caddr(addrs[i]).c_str(), lisa_disasm(inst, lisa::Cdb::window(addrs[i]), next, next2).c_str());
             const lisa::CdbLine* l = sim_.cdb().loaded() ? sim_.cdb().line_at(addrs[i]) : nullptr;
             if (l) printf("  %s:%d in %s()", l->file.c_str(), l->line, sim_.cdb().function_at(addrs[i])->name.c_str());
             printf("\n");
@@ -543,8 +544,9 @@ void LisaCli::cmd_dis(const std::vector<std::string>& args) {
         uint32_t a = addr + i;
         uint16_t inst = sim_.memory().inst_read(code_phys(a));
         uint16_t next = sim_.memory().inst_read(code_phys(a + 1));
+        uint16_t next2 = sim_.memory().inst_read(code_phys(a + 2));   // ldxf: two words follow
         const char* marker = (a == st.pc) ? ">" : " ";
-        printf("%s %04X: %04X  %s\n", marker, a, inst, lisa_disasm(inst, (uint16_t)(a & 0x7FFF), next).c_str());
+        printf("%s %04X: %04X  %s\n", marker, a, inst, lisa_disasm(inst, (uint16_t)(a & 0x7FFF), next, next2).c_str());
     }
 }
 
