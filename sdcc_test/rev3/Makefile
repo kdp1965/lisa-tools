@@ -15,7 +15,7 @@ all: $(TESTS:%=%.ihx)
 	$(SDLD) -i $<
 
 check: all
-	@for t in $(TESTS); do printf "%-14s " $$t; $(SIM) --rev3 -b -c 300000 $$t.ihx 2>&1 | grep -E "ALL PASSED|SOME FAILED|FAIL" | tr '\n' ' '; echo; done
+	@for t in $(TESTS); do printf "%-14s " $$t; $(SIM) --rev3 -b -c 1500000 $$t.ihx 2>&1 | grep -E "ALL PASSED|SOME FAILED|FAIL" | tr '\n' ' '; echo; done
 
 clean:
 	rm -f *.rel *.ihx *.lst *.sym *.map *.rst *.hlr

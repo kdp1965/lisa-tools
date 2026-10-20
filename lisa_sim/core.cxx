@@ -307,6 +307,15 @@ void LisaCore::div_aftermath(uint8_t dv, uint16_t off, uint16_t divisor, bool is
     // bit 15 as ra_cond (a quotient by one is the dividend), the other
     // result - the remainder after div, the quotient after rem - in IX,
     // and no memory write
+    if (rev3_) {
+        // the third chip (REV3.md): the whole 16-bit result in RA[15:0] (bit
+        // 15 as ra_cond too), the other one in IX[15:0], the upper bytes 0
+        ra_ = div_->result() & 0xFFFF;
+        ra_cond_ = (div_->result() & 0x8000) != 0;
+        ix_ = div_->other() & 0xFFFF;
+        ix_cond_ = false;
+        return;
+    }
     if (rev2_) {
         ra_ = div_->result() & 0x7FFF;
         ra_cond_ = (div_->result() & 0x8000) != 0;
@@ -1822,12 +1831,19 @@ int LisaCore::step_inst() {
             // (which must be below the divisor).  Unsigned.
             if (rev2_ && (inst & 0xFFFC) == 0xA174) {
                 if (cond_ & 1) {
-                    div_->chain((uint16_t)((ix_cond_ ? 0x8000 : 0) | (ix_ & 0x7FFF)), a_);
+                    div_->chain(rev3_ ? (uint16_t)(ix_ & 0xFFFF) : (uint16_t)((ix_cond_ ? 0x8000 : 0) | (ix_ & 0x7FFF)), a_);
                     a_ = div_->result() & 0xFF;
-                    ra_ = div_->result() & 0x7FFF;
-                    ra_cond_ = (div_->result() & 0x8000) != 0;
-                    ix_ = div_->other() & 0x7FFF;
-                    ix_cond_ = (div_->other() & 0x8000) != 0;
+                    if (rev3_) {        // REV3.md: 16 bits in RA[15:0] and IX[15:0], the upper bytes 0
+                        ra_ = div_->result() & 0xFFFF;
+                        ra_cond_ = (div_->result() & 0x8000) != 0;
+                        ix_ = div_->other() & 0xFFFF;
+                        ix_cond_ = false;
+                    } else {
+                        ra_ = div_->result() & 0x7FFF;
+                        ra_cond_ = (div_->result() & 0x8000) != 0;
+                        ix_ = div_->other() & 0x7FFF;
+                        ix_cond_ = (div_->other() & 0x8000) != 0;
+                    }
                 }
                 cond_ = 0x02 | (cond_ >> 1);
                 cycles = 2;

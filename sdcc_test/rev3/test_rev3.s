@@ -1,12 +1,29 @@
 ; test_rev3.s - the third chip's 24-bit IX, SP, RA and IA (ttsky26d REV3.md),
-; standalone: the reset vector at word 0, the UART at [p:0x10/0x11], ABS areas,
+; standalone: the reset vector at word 0, the timer's handler at its vector (word 1), the
+; UART at [p:0x10/0x11], ABS areas, 40 checks: the new instructions, the
+; three-byte pairs, far data, calls and an interrupt across code banks, the
+; divider's results, the stack above 64K, the adders, the predicate rules;
 ; "ok NN" / "FAIL NN" lines and ALL PASSED / SOME FAILED as sdcc_test's harness
 ; prints them.  lisa_sim --rev3, the chip testbench with the cache.
 	.module test_rev3
 
 	.area CODE (ABS,CODE)
 	.org 0
-	jal	main			; the reset vector; interrupts unused
+	jal	main			; the reset vector
+	; word 1, the timer's vector (interrupt source 0): the handler itself
+isr_timer:
+	push	ix
+	ldi	#1
+	sta	0x20F			; INT_STATUS: the timer acknowledged
+	xchg	ia			; IX = IA = {0, bank, 0, pc + 1}, the condition bit set by xchg
+	txah
+	sta	0x1F6
+	xchg	ia			; IA back
+	ldi	#1
+	sta	0x1F5
+	pop	ix
+	rets
+
 	.org 0x40
 main:
 	ldx	#0xFFFF
@@ -172,6 +189,214 @@ main:
 	ldi	#19
 	jal	check
 
+	; 20-22: an interrupt taken in code bank 2: IA carries the bank, rets
+	; returns there and brings CB back; the handler is in the common lower 16K
+	ldxf	#0x824010		; irqwait in bank 2
+	call	ix
+	lda	0x1F6			; {1 (xchg ia sets the condition bit), bank 2}
+	cpi	#0x82
+	ldac	eq
+	sta	0x1F1
+	ldi	#20
+	jal	check
+	lda	0x215			; CB back to 1
+	cpi	#1
+	ldac	eq
+	sta	0x1F1
+	ldi	#21
+	jal	check
+	lda	0x1F5			; the handler ran
+	cpi	#1
+	ldac	eq
+	sta	0x1F1
+	ldi	#22
+	jal	check
+
+	; 23-25: div 3 (8-bit by 8-bit): the quotient in A, the remainder in IX with its upper bytes 0
+	ldi	#200
+	tax
+	ldi	#7
+	div	3
+	cpi	#28
+	ldac	eq
+	sta	0x1F1
+	ldi	#23
+	jal	check
+	txa
+	cpi	#4
+	ldac	eq
+	sta	0x1F1
+	ldi	#24
+	jal	check
+	txah
+	cpi	#0
+	ldac	eq
+	sta	0x1F1
+	ldi	#25
+	jal	check
+
+	; 26: a 16-bit quotient keeps its bit 15 in RA[15]: 0xFFFE / 1
+	ads	#-2
+	ldi	#0xFF
+	stax	0(sp)
+	ldi	#0xFE
+	lddiv	0(sp)
+	ldi	#1
+	div	1
+	xchg	ra
+	txau
+	cpi	#0xFF
+	ldac	eq
+	sta	0x1F1
+	ldi	#26
+	jal	check
+	ads	#2
+
+	; 27, 28: the stack above 64K: push a / pop a at SP 0x7FFF00, the byte lands at 0x7FFEFF
+	; (both read before check runs: its own frame goes there too)
+	ldxf	#0x7FFF00
+	xchg	sp
+	ldi	#0x5A
+	push	a
+	ldi	#0
+	pop	a
+	sta	0x1FB			; what pop a brought back
+	ldxf	#0x7FFEFF
+	ldax	0(ix)
+	sta	0x1FC			; the byte where push a put it
+	ldxf	#0x00FFFF
+	xchg	sp			; SP back
+	lda	0x1FB
+	cpi	#0x5A
+	ldac	eq
+	sta	0x1F1
+	ldi	#27
+	jal	check
+	lda	0x1FC
+	cpi	#0x5A
+	ldac	eq
+	sta	0x1F1
+	ldi	#28
+	jal	check
+
+	; 29-31: the IX adders carry through bits 15 and 16: adx, addax, subax
+	ldxf	#0x00FFF0
+	adx	#0x20			; 0x010010, the condition bit set
+	txah
+	cpi	#0x81
+	ldac	eq
+	sta	0x1F1
+	ldi	#29
+	jal	check
+	ldxf	#0x01FFFF
+	ldi	#1
+	addax				; 0x020000
+	txah
+	cpi	#0x82
+	ldac	eq
+	sta	0x1F1
+	ldi	#30
+	jal	check
+	ldxf	#0x020000
+	ldi	#1
+	subax				; 0x01FFFF
+	txau
+	cpi	#0xFF
+	ldac	eq
+	sta	0x1F1
+	ldi	#31
+	jal	check
+
+	; 32: cpx sp compares all 23 bits: 0x100000 is not below SP = 0xFFFF
+	ldxf	#0x100000
+	cpx	sp
+	ldac	nc
+	sta	0x1F1
+	ldi	#32
+	jal	check
+
+	; 33: a skipped push ix shifts the predicate once: the instruction after it runs
+	ldi	#0x66
+	sta	0x1F8
+	ldi	#1
+	cpi	#2
+	if	eq
+	push	ix			; skipped
+	ldi	#0x55			; runs
+	sta	0x1F8
+	lda	0x1F8
+	cpi	#0x55
+	ldac	eq
+	sta	0x1F1
+	ldi	#33
+	jal	check
+
+	; 34: an executed push ix under ifte shifts it once: the else instruction is skipped
+	ldi	#0x11
+	sta	0x1F9
+	ldi	#1
+	cpi	#1
+	ifte	eq
+	push	ix			; runs
+	ldi	#0x22			; the else part: skipped
+	sta	0x1F9			; runs: A still 1 (0x22 if the else part ran, 0x11 if this was skipped too)
+	pop	ix
+	lda	0x1F9
+	cpi	#1
+	ldac	eq
+	sta	0x1F1
+	ldi	#34
+	jal	check
+
+	; 35, 36: a literal of ldx that decodes as "if ne" is a literal
+	ldi	#1
+	cpi	#1
+	ldx	#0xA201
+	ldi	#0x33			; runs: no "if ne" happened
+	sta	0x1FA
+	lda	0x1FA
+	cpi	#0x33
+	ldac	eq
+	sta	0x1F1
+	ldi	#35
+	jal	check
+	txau
+	cpi	#0xA2
+	ldac	eq
+	sta	0x1F1
+	ldi	#36
+	jal	check
+
+	; 37, 38: ret #imm8 from bank 2 loads A and brings CB back
+	ldxf	#0x824030
+	call	ix
+	cpi	#0x44
+	ldac	eq
+	sta	0x1F1
+	ldi	#37
+	jal	check
+	lda	0x215
+	cpi	#1
+	ldac	eq
+	sta	0x1F1
+	ldi	#38
+	jal	check
+
+	; 39, 40: a call from bank 2 into bank 3 and back: each ret restores its caller's bank
+	ldxf	#0x824032
+	call	ix
+	cpi	#0x55
+	ldac	eq
+	sta	0x1F1
+	ldi	#39
+	jal	check
+	lda	0x215
+	cpi	#1
+	ldac	eq
+	sta	0x1F1
+	ldi	#40
+	jal	check
+
 	; done
 	lda	0x1F2
 	cpi	#0
@@ -258,6 +483,7 @@ putc:
 	sta	0x210
 	ret
 
+
 	.area KSTR (ABS,CODE,KDATA)		; packed bytes, two to a word: lda (ix++) reads them
 	.org 0x1000
 s_ok:		.ascii	"ok "
@@ -282,6 +508,51 @@ s_hex:		.ascii	"0123456789abcdef"
 	.area KFAR2 (ABS,CODE,KDATA)	; packed constants in bank 2: byte 0x10010 = word 0x8008 = window word 0x4008
 	.org 0x10010
 	.ascii	"AB"
+
+	.area FAR2B (ABS,CODE)
+	.org 0x10020			; window word 0x4010: irqwait - the timer on, wait for the handler, off
+	ldi	#0
+	sta	0x1F5
+	sta	0x20C			; TIMER1_CTRL off
+	ldi	#0xFF
+	sta	0x208			; the prescaler: 256 clocks a tick
+	ldi	#0
+	sta	0x209
+	ldi	#2
+	sta	0x20A			; two ticks
+	ldi	#0
+	sta	0x20B
+	ldi	#1
+	sta	0x20F			; INT_STATUS: anything pending cleared
+	sta	0x20E			; INT_ENABLE: the timer
+	sta	0x20C			; TIMER1_CTRL on
+	ei
+1$:	lda	0x1F5
+	bz	1$
+	di
+	ldi	#0
+	sta	0x20C
+	sta	0x20E
+	ldi	#1
+	sta	0x20F
+	ret
+
+	.area FAR2C (ABS,CODE)
+	.org 0x10060			; window word 0x4030: ret #imm8 from a bank
+	ret	#0x44
+
+	.area FAR2D (ABS,CODE)
+	.org 0x10064			; window word 0x4032: into bank 3 and back
+	sra
+	ldxf	#0x834000
+	call	ix
+	lra
+	ret
+
+	.area FAR3 (ABS,CODE)
+	.org 0x18000			; code bank 3, window word 0x4000
+	ldi	#0x55
+	ret
 
 	.area CODE2 (ABS,CODE)
 	.org 0x1800			; byte 0x1800 = word 0xC00
