@@ -215,13 +215,15 @@ void LisaSimulator::set_trace(bool on) {
         core_.set_trace_callback([this](uint16_t pc, uint16_t inst, const LisaCoreState&) {
             char buf[128];
             uint16_t next = memory_.inst_read(core_.code_pa(pc + 1));
-            uint16_t sp;
+            uint16_t next2 = memory_.inst_read(core_.code_pa(pc + 2));
+            uint32_t sp;
             sp = core_.get_state().sp;
-            std::string dis = lisa_disasm(inst, pc, next);
-            snprintf(buf, sizeof(buf), "  %04X: %04X  %-24s A=%02X IX=%04X SP=%04X RA=%04X %c%c STK=%02X %02X %02X %02X",
+            std::string dis = lisa_disasm(inst, pc, next, next2);
+            int w = core_.rev3() ? 6 : 4;             // the register width (--rev3: 24 bits)
+            snprintf(buf, sizeof(buf), "  %04X: %04X  %-24s A=%02X IX=%0*X SP=%0*X RA=%0*X %c%c STK=%02X %02X %02X %02X",
                      pc, inst, dis.c_str(),
-                     core_.get_state().a, core_.get_state().ix, sp, 
-                     core_.get_state().ra,
+                     core_.get_state().a, w, core_.get_state().ix, w, sp,
+                     w, core_.get_state().ra,
                      core_.get_state().zflag ? 'Z' : '.', core_.get_state().cflag ? 'C' : '.',
                      memory_.data_read(core_.data_pa(sp, true)),
                      memory_.data_read(core_.data_pa(sp+1, true)),
