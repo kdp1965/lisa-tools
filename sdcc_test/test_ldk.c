@@ -67,15 +67,19 @@ static unsigned char next(void)
 
 int main(void)
 {
-  unsigned int start;
-  unsigned char v;
+  unsigned int start, bix;
+  unsigned char v, v5, r[7], i;
 
+  /* The harness's strings ("ok ", the hex digits) are packed constants too
+   * (--pack-const): every CHECK and puts runs with KB = 0, the values read
+   * under another KB are kept in variables (on the chip an unprogrammed
+   * bank reads 0xFF for ever: puts never ends) */
   v = KB;
   CHECK(1, v == 0);                     /* reset: the lower half */
   KB = 5;
-  v = KB;
-  CHECK(2, v == 5);                     /* writable, 6 bits */
+  v5 = KB;
   KB = 0;
+  CHECK(2, v5 == 5);                    /* writable, 6 bits */
 
   g_ix = (unsigned int)pattern << 1;    /* the byte offset of its first word in the bank */
   start = g_ix;
@@ -94,17 +98,20 @@ int main(void)
 
   kb_of_pattern2();                     /* KB = bank 2 */
   g_ix = (unsigned int)pattern2 << 1;   /* 0x4000 << 1 = 0x8000: offset 0 of the bank (bit 15 is not an address) */
+  bix = g_ix;
   v = KB;
-  puts("bank "); puthex(v); putc(' '); puthex(g_ix); putc('\n');
-  CHECK(14, v == 2);
-  CHECK(15, next() == 0x56);
-  CHECK(16, next() == 0x80);
-  CHECK(17, next() == 0x78);
-  CHECK(18, next() == 0x80);
-  CHECK(19, next() == 0xCD);
-  CHECK(20, next() == 0x80);
-  CHECK(21, next() == 0x00);
+  for (i = 0; i < 7; i++)
+    r[i] = next();
   KB = 0;
+  puts("bank "); puthex(v); putc(' '); puthex(bix); putc('\n');
+  CHECK(14, v == 2);
+  CHECK(15, r[0] == 0x56);
+  CHECK(16, r[1] == 0x80);
+  CHECK(17, r[2] == 0x78);
+  CHECK(18, r[3] == 0x80);
+  CHECK(19, r[4] == 0xCD);
+  CHECK(20, r[5] == 0x80);
+  CHECK(21, r[6] == 0x00);
   v = KB;
   CHECK(22, v == 0);
   DONE();
