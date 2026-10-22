@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "spi.h"
+
 class LisaUart;
 
 // Peripheral register addresses (7-bit, matching lisa_periph.v)
@@ -64,6 +66,12 @@ namespace PeriphReg {
     constexpr uint8_t I2C_STATUS      = 0x24;
     constexpr uint8_t I2C_TX_DATA     = 0x25;
     constexpr uint8_t I2C_CMD         = 0x26;
+
+    // SPI master (the third chip, ttsky26d RESPIN 29: spi.h)
+    constexpr uint8_t SPI_DATA        = 0x28;
+    constexpr uint8_t SPI_CTRL        = 0x29;
+    constexpr uint8_t SPI_DIV         = 0x2A;
+    constexpr uint8_t SPI_STATUS      = 0x2B;
 }
 
 // Interrupt source bits
@@ -75,6 +83,7 @@ namespace IntSrc {
     constexpr uint8_t GPIO_A  = 0x10;
     constexpr uint8_t TTLC    = 0x20;
     constexpr uint8_t I2C     = 0x40;
+    constexpr uint8_t SPI     = 0x80;  // the third chip's SPI master: DONE with IE (a level)
 }
 
 struct TimerState {
@@ -120,6 +129,9 @@ public:
     void set_port_d(uint8_t val) { port_d_in_ = val; }
     uint8_t get_port_e() const { return port_e_out_; }
     void set_port_c_input(uint8_t val) { port_c_in_ = val; }
+
+    // The SPI master (--rev3) and the devices on its selects
+    LisaSpi& spi() { return spi_; }
     uint8_t get_port_c_out() const { return port_c_out_; }
     uint8_t get_port_c_dir() const { return port_c_dir_; }
 
@@ -161,6 +173,10 @@ private:
     // Connected UARTs
     LisaUart* uart1_;
     LisaUart* uart2_;
+
+    // SPI master (the third chip)
+    LisaSpi  spi_;
+    uint8_t  spi_request() const { return rev3_ && spi_.irq() ? IntSrc::SPI : 0; }
 
     void tick_timer(TimerState& t, uint8_t int_bit);
 };

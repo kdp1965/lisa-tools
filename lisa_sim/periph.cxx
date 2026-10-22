@@ -33,6 +33,7 @@ void LisaPeripherals::reset() {
     i2c_status_ = 0;
     i2c_tx_data_ = 0;
     i2c_cmd_ = 0;
+    spi_.reset();
 }
 
 uint8_t LisaPeripherals::read(uint8_t addr) {
@@ -66,7 +67,7 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
 
     // Interrupts
     case PeriphReg::INT_ENABLE:      return int_enable_;
-    case PeriphReg::INT_STATUS:      return int_status_ | uart_requests();
+    case PeriphReg::INT_STATUS:      return int_status_ | uart_requests() | spi_request();
 
     // UART 1
     case PeriphReg::UART1_DATA:
@@ -105,6 +106,12 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
     case PeriphReg::BANK_STACK:      return rev2_ && !rev3_ ? stack_bank_ : 0;
     case PeriphReg::BANK_CONST:      return rev2_ && !rev3_ ? const_bank_ : 0;
 
+    // the SPI master: the third chip's
+    case PeriphReg::SPI_DATA:
+    case PeriphReg::SPI_CTRL:
+    case PeriphReg::SPI_DIV:
+    case PeriphReg::SPI_STATUS:      return rev3_ ? spi_.read(addr) : 0;
+
     default:
         return 0;
     }
@@ -123,6 +130,10 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
     case PeriphReg::BANK_DATA:       if (rev2_ && !rev3_) data_bank_  = val & 0x1F; break;     // 5 bits: 32 granules of 8K (RESPIN 28)
     case PeriphReg::BANK_STACK:      if (rev2_ && !rev3_) stack_bank_ = val & 0x0F; break;
     case PeriphReg::BANK_CONST:      if (rev2_ && !rev3_) const_bank_ = val & 0x3F; break;     // KB (RESPIN 26)
+    case PeriphReg::SPI_DATA:
+    case PeriphReg::SPI_CTRL:
+    case PeriphReg::SPI_DIV:
+    case PeriphReg::SPI_STATUS:      if (rev3_) spi_.write(addr, val); break;
 
     // Timer 1
     case PeriphReg::TIM1_PREDIV_LO:
@@ -230,6 +241,8 @@ void LisaPeripherals::tick_timer(TimerState& t, uint8_t int_bit) {
 }
 
 void LisaPeripherals::tick() {
+    if (rev3_)
+        spi_.tick();
     tick_timer(timer1_, IntSrc::TIMER1);
     tick_timer(timer2_, IntSrc::TIMER2);
 
@@ -263,5 +276,5 @@ uint8_t LisaPeripherals::uart_requests() const {
 }
 
 uint8_t LisaPeripherals::get_interrupts() const {
-    return (int_status_ | uart_requests()) & int_enable_;
+    return (int_status_ | uart_requests() | spi_request()) & int_enable_;
 }

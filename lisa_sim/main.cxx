@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cctype>
 #include <string>
+#include <memory>
 
 static void usage(const char* prog) {
     printf("Usage: %s [options] [firmware.hex]\n", prog);
@@ -18,6 +19,10 @@ static void usage(const char* prog) {
     printf("  --send-at N      ... after N cycles of the run (batch / -r; default: before it)\n");
     printf("  -s N             Run for N steps then stop\n");
     printf("  -p PORT          Connect UART1 to host serial port\n");
+    printf("  --spi-flash FILE[,SIZE]   A SPI NOR flash (W25Q128JV commands) on the SPI master's\n");
+    printf("                   CS0 (--rev3, [p:0x28-0x2B]); --spi-flash1 on CS1. The image is\n");
+    printf("                   read from FILE (erased past its end; SIZE default 16 MB) and\n");
+    printf("                   written back at exit when the program changed it\n");
     printf("     --port PORT\n");
     printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
     printf("                   without the cache; default 32768); addresses wrap\n");
@@ -63,6 +68,8 @@ int main(int argc, char** argv) {
     uint64_t send_at = 0;
     int max_steps = 0;
     std::string serial_port;
+    std::string spi_flash[2];
+    uint32_t spi_flash_size[2] = { 16u << 20, 16u << 20 };
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -124,6 +131,20 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Error: -m needs a power of two from 2 to 32768\n");
                 return 1;
             }
+        } else if ((strcmp(argv[i], "--spi-flash") == 0 || strcmp(argv[i], "--spi-flash1") == 0) && i + 1 < argc) {
+            int cs = argv[i][11] == '1';
+            std::string a = argv[++i];
+            size_t comma = a.find(',');
+            if (comma != std::string::npos) {
+                spi_flash_size[cs] = (uint32_t) strtoul(a.c_str() + comma + 1, nullptr, 0);
+                a = a.substr(0, comma);
+            }
+            uint32_t s = spi_flash_size[cs];
+            if (s < 4096 || (s & (s - 1))) {
+                fprintf(stderr, "--spi-flash: the size must be a power of two, 4K or more\n");
+                return 1;
+            }
+            spi_flash[cs] = a;
         } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
             serial_port = argv[++i];
         } else if (argv[i][0] != '-') {
@@ -155,6 +176,17 @@ int main(int argc, char** argv) {
         sim.uart1().set_rx_fifo(8, 1085);
         sim.uart2().set_rx_fifo(8, 1085);
         lisa::Cdb::set_sp_top(0);      // the frames of sdcc --rev2 start at 0(sp)
+    }
+    // the SPI master's devices (--rev3): a NOR flash on CS0 / CS1, its image
+    // read from the file (erased where the file ends) and written back at exit
+    std::unique_ptr<SpiFlash> flash[2];
+    for (int cs = 0; cs < 2; cs++) {
+        if (spi_flash[cs].empty())
+            continue;
+        if (!rev3)
+            fprintf(stderr, "--spi-flash: the SPI master is the third chip's (--rev3)\n");
+        flash[cs].reset(new SpiFlash(spi_flash[cs], spi_flash_size[cs]));
+        sim.periph().spi().attach(cs, flash[cs].get());
     }
     if (icache_lines >= 0)
         sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct, icache_stream);

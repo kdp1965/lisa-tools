@@ -80,7 +80,7 @@ REV2CACHE += test_irqcache
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 # the third chip: the second chip's tests less its data banks and KB, plus its own
-REV3TESTS = test_cachermw8 test_bank test_huge test_ldirq test_uartirq test_divc test_rev3c
+REV3TESTS = test_cachermw8 test_bank test_huge test_ldirq test_uartirq test_divc test_rev3c test_spiflash
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV3),$(REV3TESTS),$(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE)))
 
 all: $(TESTS:%=%$(SFX).ihx)
@@ -150,6 +150,10 @@ export SIMFLAGS_test_irq
 # the bench types "Hi" into UART1 once the program has set up its interrupt
 SIMFLAGS_test_uartirq = --send Hi --send-at 60000
 export SIMFLAGS_test_uartirq
+# the third chip's SPI master with a flash on CS0 (ttsky26d RESPIN 29); the
+# image starts erased and is thrown away
+SIMFLAGS_test_spiflash = --spi-flash /dev/null
+export SIMFLAGS_test_spiflash
 
 check: all
 	@pass=0; fail=0; \
