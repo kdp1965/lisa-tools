@@ -23,10 +23,13 @@ public:
 // status, 06 / 04 the write enable, 03 / 0B read, 02 page program (inside
 // the 256-byte page, bits only cleared), 20 / 52 / D8 erase 4K / 32K / 64K,
 // C7 / 60 the chip.  Erase and program take no time (BUSY never shows).
-// Backed by a file, written back when the simulator exits.
+// Backed by a file, written back when the simulator exits.  With sst set it
+// is an SST25VF064C instead (BF 25 4B): the block protection bits of the
+// status register are set at power-up and keep the array from programs and
+// erases until EWSR (50) or WREN and WRSR (01) clear them.
 class SpiFlash : public SpiDevice {
 public:
-    SpiFlash(const std::string& path, uint32_t size);
+    SpiFlash(const std::string& path, uint32_t size, bool sst = false);
     ~SpiFlash();
     bool ok() const { return ok_; }
     void select() override;
@@ -40,6 +43,9 @@ private:
     bool ok_ = false;
     bool dirty_ = false;
     bool wel_ = false;
+    bool sst_ = false;
+    bool ewsr_ = false;          // SST: the status register write enabled (EWSR)
+    uint8_t bp_ = 0;             // the status register's bits 7:2 (block protection)
     uint8_t cmd_ = 0;
     uint32_t n_ = 0;             // bytes since the select
     uint32_t addr_ = 0;

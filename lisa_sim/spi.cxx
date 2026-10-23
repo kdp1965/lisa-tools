@@ -1,11 +1,21 @@
 #include "spi.h"
 
 #include <cstdio>
+#include <cstdlib>
+
+// LISA_SPI_TRACE=1: each command to stderr when its select ends
+static bool spi_trace()
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("LISA_SPI_TRACE") != nullptr;
+    return on;
+}
 
 // ---------------------------------------------------------------- SpiFlash
 
-SpiFlash::SpiFlash(const std::string& path, uint32_t size)
-    : path_(path), mem_(size, 0xFF)
+SpiFlash::SpiFlash(const std::string& path, uint32_t size, bool sst)
+    : path_(path), mem_(size, 0xFF), sst_(sst), bp_(sst ? 0x3C : 0)
 {
     FILE* f = fopen(path.c_str(), "rb");
     if (f) {
@@ -53,8 +63,12 @@ void SpiFlash::erase(uint32_t base, uint32_t len)
 
 void SpiFlash::deselect()
 {
+    if (spi_trace() && n_ > 0)
+        fprintf(stderr, "spi flash: cmd %02X addr %06X bytes %u wel %d bp %02X\n",
+                cmd_, addr_ & 0xFFFFFF, n_, wel_, bp_);
     // an erase runs when the select goes high after its whole address
-    if (n_ == 4 && wel_) {
+    bool prot = (bp_ & 0x3C) != 0;
+    if (n_ == 4 && wel_ && !prot) {
         switch (cmd_) {
         case 0x20: erase(addr_, 0x1000);  break;
         case 0x52: erase(addr_, 0x8000);  break;
@@ -62,11 +76,13 @@ void SpiFlash::deselect()
         default: break;
         }
     }
-    if (n_ >= 1 && (cmd_ == 0xC7 || cmd_ == 0x60) && wel_)
+    if (n_ >= 1 && (cmd_ == 0xC7 || cmd_ == 0x60) && wel_ && !prot)
         erase(0, (uint32_t) mem_.size());
     if (n_ >= 1 && cmd_ != 0x06 && cmd_ != 0x05 && cmd_ != 0x35 && cmd_ != 0x9F &&
-        cmd_ != 0x03 && cmd_ != 0x0B && cmd_ != 0x90 && cmd_ != 0xAB)
-        wel_ = false;           // a program or erase ends the write enable
+        cmd_ != 0x03 && cmd_ != 0x0B && cmd_ != 0x90 && cmd_ != 0xAB && cmd_ != 0x50)
+        wel_ = false;           // a program, erase or status write ends the write enable
+    if (n_ >= 1 && cmd_ != 0x50)
+        ewsr_ = false;          // EWSR enables only the next command
     n_ = 0;
 }
 
@@ -78,20 +94,27 @@ uint8_t SpiFlash::xfer(uint8_t mosi)
         cmd_ = mosi;
         if (cmd_ == 0x06) wel_ = true;
         if (cmd_ == 0x04) wel_ = false;
+        if (cmd_ == 0x50) ewsr_ = true;
         return 0xFF;            // MISO floats under the command: the pull-up
+    }
+    if (cmd_ == 0x01) {         // WRSR: the protection bits, after WREN or (SST) EWSR
+        if (n == 1 && (wel_ || ewsr_))
+            bp_ = mosi & 0xBC;
+        return 0xFF;
     }
     if (n <= 3 && cmd_ != 0x9F && cmd_ != 0x05 && cmd_ != 0x35) {
         addr_ = (addr_ << 8) | mosi;
         return 0xFF;
     }
     switch (cmd_) {
-    case 0x9F: {                // JEDEC ID: Winbond, W25Q128JV
+    case 0x9F: {                // JEDEC ID: Winbond W25Q128JV, or SST25VF064C
         static const uint8_t id[3] = { 0xEF, 0x40, 0x18 };
-        return n <= 3 ? id[n - 1] : 0xFF;
+        static const uint8_t sid[3] = { 0xBF, 0x25, 0x4B };
+        return n <= 3 ? (sst_ ? sid : id)[n - 1] : 0xFF;
     }
-    case 0x90: return (n & 1) ? 0x17 : 0xEF;
-    case 0xAB: return 0x17;
-    case 0x05: return wel_ ? 0x02 : 0x00;
+    case 0x90: return sst_ ? ((n & 1) ? 0x4B : 0xBF) : ((n & 1) ? 0x17 : 0xEF);
+    case 0xAB: return sst_ ? ((n & 1) ? 0x4B : 0xBF) : 0x17;   // SST: as 90 (the board reads BF at address 0)
+    case 0x05: return bp_ | (wel_ ? 0x02 : 0x00);
     case 0x35: return 0x02;     // QE set, as the parts ship
     case 0x03: return mem_[addr_++ & mask];
     case 0x0B:
@@ -99,7 +122,7 @@ uint8_t SpiFlash::xfer(uint8_t mosi)
             return 0xFF;        // the dummy byte
         return mem_[addr_++ & mask];
     case 0x02:
-        if (wel_) {
+        if (wel_ && !(bp_ & 0x3C)) {
             uint32_t a = addr_ & mask;
             uint32_t p = (a & ~0xFFu) | ((a + (n - 4)) & 0xFFu);
             mem_[p] &= mosi;

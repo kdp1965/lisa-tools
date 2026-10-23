@@ -19,10 +19,11 @@ static void usage(const char* prog) {
     printf("  --send-at N      ... after N cycles of the run (batch / -r; default: before it)\n");
     printf("  -s N             Run for N steps then stop\n");
     printf("  -p PORT          Connect UART1 to host serial port\n");
-    printf("  --spi-flash FILE[,SIZE]   A SPI NOR flash (W25Q128JV commands) on the SPI master's\n");
-    printf("                   CS0 (--rev3, [p:0x28-0x2B]); --spi-flash1 on CS1. The image is\n");
-    printf("                   read from FILE (erased past its end; SIZE default 16 MB) and\n");
-    printf("                   written back at exit when the program changed it\n");
+    printf("  --spi-flash FILE[,SIZE[,sst]]   A SPI NOR flash (W25Q128JV commands) on the SPI\n");
+    printf("                   master's CS0 (--rev3, [p:0x28-0x2B]); --spi-flash1 on CS1. The\n");
+    printf("                   image is read from FILE (erased past its end; SIZE default 16 MB)\n");
+    printf("                   and written back at exit when the program changed it; sst = an\n");
+    printf("                   SST25VF064C (BF 25 4B, protected at power-up; SIZE 8 MB)\n");
     printf("     --port PORT\n");
     printf("  -m BYTES         Data RAM size, a power of two (128 = the TT07 chip\n");
     printf("                   without the cache; default 32768); addresses wrap\n");
@@ -70,6 +71,7 @@ int main(int argc, char** argv) {
     std::string serial_port;
     std::string spi_flash[2];
     uint32_t spi_flash_size[2] = { 16u << 20, 16u << 20 };
+    bool spi_flash_sst[2] = { false, false };
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -136,8 +138,25 @@ int main(int argc, char** argv) {
             std::string a = argv[++i];
             size_t comma = a.find(',');
             if (comma != std::string::npos) {
-                spi_flash_size[cs] = (uint32_t) strtoul(a.c_str() + comma + 1, nullptr, 0);
+                std::string rest = a.substr(comma + 1);
                 a = a.substr(0, comma);
+                size_t c2 = rest.find(',');
+                std::string kind = c2 == std::string::npos ? "" : rest.substr(c2 + 1);
+                if (c2 != std::string::npos)
+                    rest = rest.substr(0, c2);
+                if (rest == "sst") {
+                    kind = rest;
+                    rest.clear();
+                }
+                if (kind == "sst") {
+                    spi_flash_sst[cs] = true;
+                    spi_flash_size[cs] = 8u << 20;
+                } else if (!kind.empty()) {
+                    fprintf(stderr, "--spi-flash: unknown part '%s' (sst)\n", kind.c_str());
+                    return 1;
+                }
+                if (!rest.empty())
+                    spi_flash_size[cs] = (uint32_t) strtoul(rest.c_str(), nullptr, 0);
             }
             uint32_t s = spi_flash_size[cs];
             if (s < 4096 || (s & (s - 1))) {
@@ -185,7 +204,7 @@ int main(int argc, char** argv) {
             continue;
         if (!rev3)
             fprintf(stderr, "--spi-flash: the SPI master is the third chip's (--rev3)\n");
-        flash[cs].reset(new SpiFlash(spi_flash[cs], spi_flash_size[cs]));
+        flash[cs].reset(new SpiFlash(spi_flash[cs], spi_flash_size[cs], spi_flash_sst[cs]));
         sim.periph().spi().attach(cs, flash[cs].get());
     }
     if (icache_lines >= 0)
