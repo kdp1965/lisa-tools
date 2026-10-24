@@ -2,7 +2,8 @@
 # icache_sweep.py [config name ...] - run the suite on lisa_sim with several
 # instruction cache configurations (--icache, lisa_sim/icache.h) and tabulate
 # misses per 1000 instructions and clocks per instruction against the chip's
-# single 4-word line.  make icache.
+# single 4-word line.  make icache.  REV3=1: the *_rev3.ihx images (make
+# check REV3=1) on lisa_sim --rev3, the programs that exist for it.
 import subprocess, re, sys, os
 SIM = '../lisa_sim/lisa_sim'
 PROGS = ('test_core test_negate test_union test_varargs test_digits test_signed test_strs test_regress '
@@ -12,12 +13,18 @@ FLAGS = {'test_irq': ['--fixed-irq']}
 CONFIGS = [('chip 1x4', '1x4'), ('4x4 LRU', '4x4'), ('16x4 direct', '16x4,direct'), ('4x16 LRU', '4x16'),
            ('stream', '0,stream'), ('stream+1x4', '1x4,stream'), ('stream+4x4', '4x4,stream'),
            ('stream+4x16', '4x16,stream'), ('stream+16x4 dir', '16x4,direct,stream'),
-           ('stream+4x16 r40', '4x16,40,stream')]
+           ('stream+4x16 r40', '4x16,40,stream'),
+           ('window 8', '0x8,window'), ('window 12', '0x12,window'), ('window 16', '0x16,window'),
+           ('window 32', '0x32,window')]
+REV3 = os.environ.get('REV3') == '1'
+if REV3:
+    PROGS = [p for p in PROGS if os.path.exists(p + '_rev3.ihx')]
 if len(sys.argv) > 1: CONFIGS = [c for c in CONFIGS if c[0] in sys.argv[1:]] or CONFIGS
 res = {}
 for p in PROGS:
     for name, cfg in CONFIGS:
-        out = subprocess.run([SIM, '-b', f'--icache={cfg}', '-c', '2000000'] + FLAGS.get(p, []) + [p + '.ihx'],
+        out = subprocess.run([SIM, '-b', f'--icache={cfg}', '-c', '2000000'] + (['--rev3'] if REV3 else []) +
+                             FLAGS.get(p, []) + [p + ('_rev3.ihx' if REV3 else '.ihx')],
                              capture_output=True, text=True).stderr
         m = re.search(r'instructions (\d+)\s+fetches (\d+)\s+hits ([\d.]+)%\s+misses (\d+) \(([\d.]+) per 1000 instructions: (\d+) streaming', out)
         c = re.search(r'clocks (\d+): (\d+) executing \+ (\d+) stalled \((\d+)%\), ([\d.]+) per instruction', out)

@@ -192,7 +192,7 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
         if (!(cond_before & 2)) return;
     }
 
-    uint8_t active = int_pending_ & int_en_;
+    uint16_t active = int_pending_ & int_en_;
     if (periph_) active |= periph_->get_interrupts();
     if (!active) return;
 
@@ -217,7 +217,7 @@ void LisaCore::do_interrupt(uint8_t cond_before, bool two_stage) {
     }
 
     // Priority-encoded vector
-    uint16_t vector = 9;
+    uint16_t vector = 9;                    // also bit 8, Timer 3 (RESPIN 32)
     for (int i = 0; i < 8; i++) {
         if (active & (1 << i)) {
             vector = i + 1;

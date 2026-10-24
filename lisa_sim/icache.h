@@ -28,6 +28,16 @@
 // looked at, so loops run from it while the burst serves straight-line
 // code.
 //
+// The streaming window (`window`, the respin's inst_stream.v): a burst
+// that keeps running into a window of D consecutive words (W in the
+// option: N must be 0), at most A (3) words past the one the core is on;
+// the words behind it stay while there is room - when the window is full
+// the oldest is dropped - so a loop of D - A words or fewer runs from the
+// window.  A fetch in the window is a hit (it waits for its word if the
+// burst has not delivered it yet), one up to REACH (2) words past it waits
+// for the burst, any other restarts it (P, default the overhead plus a
+// word).  The chip's window is D 8 (`--icache=0x8,window`).
+//
 // The model sees every instruction word the core reads and estimates the
 // clocks the core would spend: 4 per instruction (fetch, predecode, decode,
 // execute), 3 for a taken jump, branch, call or return (the PC is loaded in
@@ -39,6 +49,7 @@
 // (the code streaming through the line) and those after a jump.
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -53,7 +64,15 @@ public:
     // lines 0: no cache (only meaningful with stream); penalty 0 takes the
     // default (the fill of a line, or a restart: the overhead plus a word);
     // direct implies aligned lines.
-    void configure(int lines, int words = 4, int penalty = 0, bool direct = false, bool stream = false);
+    void configure(int lines, int words = 4, int penalty = 0, bool direct = false, bool stream = false,
+                   bool window = false);
+    static constexpr int WINDOW_AHEAD = 3;      // inst_stream.v AHEAD
+    // window mode: word ranges [first, last] held in a locked on-chip store
+    // (a fetch there costs nothing and leaves the window alone), and a
+    // per-word profile of the restarts (written by write_profile)
+    void pin(uint32_t first, uint32_t last) { pins_.push_back({first, last}); }
+    bool write_profile(const std::string& path) const;
+    static constexpr int WINDOW_REACH = 2;      // inst_stream.v REACH
     void reset();                                   // invalidate, zero the counters
     bool enabled() const { return on_; }
 
@@ -85,6 +104,15 @@ private:
     int      penalty_ = 97;
     bool     direct_  = false;
     bool     stream_  = false;
+    bool     window_  = false;      // the streaming window: depth_ words
+    int      depth_   = 8;
+    uint32_t wbase_   = 0;          // the window's first word
+    uint32_t wcur_    = 0;          // the word the core is on
+    bool     wactive_ = false;
+    std::deque<uint64_t> wready_;   // when each word of the window is (was) in
+    std::vector<std::pair<uint32_t, uint32_t>> pins_;
+    std::map<uint32_t, std::pair<uint64_t, uint64_t>> prof_;   // pc: restarts, stall clocks
+    uint64_t pinned_ = 0;
     std::deque<Pending> fifo_;
     uint16_t next_addr_      = 0;   // the word the engine reads next
     uint64_t engine_free_at_ = 0;   // when it has delivered the last one it was told to
@@ -97,6 +125,8 @@ private:
     Line* allocate(uint16_t base);
     void  store(uint16_t pc);       // a streamed word goes into the cache
     void  top_up();                 // keep the engine STREAM_FIFO words ahead
+    void  window_push(uint64_t now);    // the burst delivers the next word into the window
+    void  window_fetch(uint32_t pc, bool sequential);
 };
 
 #endif

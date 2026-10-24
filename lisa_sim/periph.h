@@ -5,6 +5,8 @@
 #include <functional>
 
 #include "spi.h"
+#include "timer3.h"
+#include "ws2812.h"
 
 class LisaUart;
 
@@ -84,6 +86,7 @@ namespace IntSrc {
     constexpr uint8_t TTLC    = 0x20;
     constexpr uint8_t I2C     = 0x40;
     constexpr uint8_t SPI     = 0x80;  // the third chip's SPI master: DONE with IE (a level)
+    constexpr uint16_t TIMER3 = 0x100; // the third chip's Timer 3 (RESPIN 32): source 8, vector 9
 }
 
 struct TimerState {
@@ -116,8 +119,8 @@ public:
     // Advance one clock cycle (for timers, etc.)
     void tick();
 
-    // Get pending interrupt mask (for core to poll)
-    uint8_t get_interrupts() const;
+    // Get pending interrupt mask (for core to poll); bit 8 Timer 3 (gated by its own IE)
+    uint16_t get_interrupts() const;
 
     // Connect UARTs
     void set_uart1(LisaUart* u) { uart1_ = u; }
@@ -125,6 +128,9 @@ public:
 
     // GPIO access for external simulation
     void set_port_a(uint8_t val) { port_a_in_ = val; }
+    // a square wave on port A bits 4 and 5 (Timer 3's capture inputs),
+    // toggling every n clocks (0: off) - the chip testbench's cap_period
+    void set_cap_wave(uint32_t n) { cap_wave_ = n; cap_cnt_ = 0; }
     uint8_t get_port_b() const { return port_b_out_; }
     void set_port_d(uint8_t val) { port_d_in_ = val; }
     uint8_t get_port_e() const { return port_e_out_; }
@@ -138,6 +144,7 @@ public:
 private:
     // GPIO
     uint8_t port_a_in_;
+    uint32_t cap_wave_ = 0, cap_cnt_ = 0;
     uint8_t port_b_out_;
     uint8_t port_c_out_;
     uint8_t port_c_in_;
@@ -176,6 +183,10 @@ private:
 
     // SPI master (the third chip)
     LisaSpi  spi_;
+    // Timer 3 (the third chip, RESPIN 32)
+    LisaTimer3 timer3_;
+    // the WS2812B driver (the third chip, RESPIN 33)
+    LisaWs2812 ws_;
     uint8_t  spi_request() const { return rev3_ && spi_.irq() ? IntSrc::SPI : 0; }
 
     void tick_timer(TimerState& t, uint8_t int_bit);

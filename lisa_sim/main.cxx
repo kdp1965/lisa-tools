@@ -32,6 +32,11 @@ static void usage(const char* prog) {
     printf("                   macro), filled by lines of P clocks (default %d + %d per word), or with\n", InstCache::FILL_OVERHEAD, InstCache::FILL_PER_WORD);
     printf("                   stream by a QSPI burst that keeps running (%d per word, a restart of P,\n", InstCache::FILL_PER_WORD);
     printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
+    printf("                   --icache=0xD[,P],window: the respin's streaming window (inst_stream.v) of D\n");
+    printf("                   words, %d ahead, the rest kept behind for loops (the chip: 0x8,window)\n", InstCache::WINDOW_AHEAD);
+    printf("  --cap-wave N     a square wave on port A bits 4-5 (Timer 3's captures), toggling every N clocks\n");
+    printf("  --icache-pin=FILE      window mode: word ranges (\"first last\", hex) in a locked on-chip store\n");
+    printf("  --icache-profile=FILE  window mode: the restarts and their stall clocks per word, after the run\n");
     printf("  --rev3           The third chip (REV3.md, the twenty-four-bit branch): IX, SP, RA and\n");
     printf("                   IA 24 bits, the pairs three bytes, ldxf / txah / taxh, a flat 8 MB\n");
     printf("                   data space, 128 code banks (implies --rev2)\n");
@@ -63,7 +68,9 @@ int main(int argc, char** argv) {
     bool rev3 = false;
     bool trace = false;
     int icache_lines = -1, icache_words = 4, icache_penalty = 0;
-    bool icache_direct = false, icache_stream = false;
+    bool icache_direct = false, icache_stream = false, icache_window = false;
+    std::string icache_profile, icache_pin;
+    uint32_t cap_wave = 0;
     uint64_t max_cycles = 0;
     std::string send_text;
     uint64_t send_at = 0;
@@ -106,18 +113,25 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             max_steps = atoi(argv[++i]);
             auto_run = true;
+        } else if (strcmp(argv[i], "--cap-wave") == 0 && i + 1 < argc) {
+            cap_wave = (uint32_t)strtoul(argv[++i], nullptr, 0);
+        } else if (strncmp(argv[i], "--icache-profile=", 17) == 0) {
+            icache_profile = argv[i] + 17;
+        } else if (strncmp(argv[i], "--icache-pin=", 13) == 0) {
+            icache_pin = argv[i] + 13;
         } else if (strncmp(argv[i], "--icache=", 9) == 0) {
             char* p = argv[i] + 9;
-            icache_lines = (int)strtol(p, &p, 0);
-            if (*p == 'x') icache_words = (int)strtol(p + 1, &p, 0);
-            if (*p == ',' && isdigit((unsigned char)p[1])) icache_penalty = (int)strtol(p + 1, &p, 0);
+            icache_lines = (int)strtol(p, &p, 10);      // base 10: 0x8 is no lines of 8 words, not hex
+            if (*p == 'x') icache_words = (int)strtol(p + 1, &p, 10);
+            if (*p == ',' && isdigit((unsigned char)p[1])) icache_penalty = (int)strtol(p + 1, &p, 10);
             while (*p == ',') {
                 if (strncmp(p + 1, "direct", 6) == 0) { icache_direct = true; p += 7; }
                 else if (strncmp(p + 1, "stream", 6) == 0) { icache_stream = true; p += 7; }
+                else if (strncmp(p + 1, "window", 6) == 0) { icache_window = true; p += 7; }
                 else break;
             }
-            if (icache_lines < (icache_stream ? 0 : 1) || icache_words < 1 || *p) {
-                fprintf(stderr, "Error: --icache=N[xW][,P][,direct][,stream] with W >= 1 and N >= 1 (0 with stream)\n");
+            if (icache_lines < ((icache_stream || icache_window) ? 0 : 1) || icache_words < 1 || *p) {
+                fprintf(stderr, "Error: --icache=N[xW][,P][,direct][,stream|,window] with W >= 1 and N >= 1 (0 with stream or window)\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--fixed-irq") == 0) {
@@ -207,8 +221,19 @@ int main(int argc, char** argv) {
         flash[cs].reset(new SpiFlash(spi_flash[cs], spi_flash_size[cs], spi_flash_sst[cs]));
         sim.periph().spi().attach(cs, flash[cs].get());
     }
+    if (cap_wave)
+        sim.periph().set_cap_wave(cap_wave);
     if (icache_lines >= 0)
-        sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct, icache_stream);
+    {
+        sim.icache().configure(icache_lines, icache_words, icache_penalty, icache_direct, icache_stream, icache_window);
+        if (!icache_pin.empty()) {          // lines "first last", hex word addresses
+            FILE* f = fopen(icache_pin.c_str(), "r");
+            unsigned a, b;
+            while (f && fscanf(f, "%x %x", &a, &b) == 2)
+                sim.icache().pin(a, b);
+            if (f) fclose(f);
+        }
+    }
 
     if (!firmware_file.empty()) {
         if (sim.load_firmware(firmware_file)) {
@@ -262,8 +287,11 @@ int main(int argc, char** argv) {
                (unsigned long long)st.cycle_count);
         printf("PC=%04X A=%02X IX=%04X SP=%04X Z=%d C=%d\n",
                st.pc, st.a, st.ix, st.sp, st.zflag, st.cflag);
-        if (sim.icache().enabled())     // stderr: stdout is the program's output
+        if (sim.icache().enabled()) {   // stderr: stdout is the program's output
             fputs(sim.icache().report().c_str(), stderr);
+            if (!icache_profile.empty())
+                sim.icache().write_profile(icache_profile);
+        }
 
         if (batch) return 0;
     }

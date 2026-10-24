@@ -34,9 +34,15 @@ void LisaPeripherals::reset() {
     i2c_tx_data_ = 0;
     i2c_cmd_ = 0;
     spi_.reset();
+    timer3_.reset();
+    ws_.reset();
 }
 
 uint8_t LisaPeripherals::read(uint8_t addr) {
+    if (rev3_ && addr >= 0x30 && addr <= 0x3F)       // Timer 3 (RESPIN 32)
+        return timer3_.read(addr);
+    if (rev3_ && addr >= 0x40 && addr <= 0x45)       // the WS2812B driver (RESPIN 33)
+        return ws_.read(addr);
     switch (addr) {
     // GPIO
     case PeriphReg::PORT_A_IN:       return port_a_in_;
@@ -67,7 +73,12 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
 
     // Interrupts
     case PeriphReg::INT_ENABLE:      return int_enable_;
-    case PeriphReg::INT_STATUS:      return int_status_ | uart_requests() | spi_request();
+    case PeriphReg::INT_STATUS: {
+        uint8_t st = int_status_;
+        if (rev3_ && ws_.ie())                       // the WS2812B's free half in place of the TTLC
+            st = (uint8_t)((st & ~IntSrc::TTLC) | (ws_.irq() ? IntSrc::TTLC : 0));
+        return st | uart_requests() | spi_request();
+    }
 
     // UART 1
     case PeriphReg::UART1_DATA:
@@ -118,6 +129,14 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
 }
 
 void LisaPeripherals::write(uint8_t addr, uint8_t val) {
+    if (rev3_ && addr >= 0x30 && addr <= 0x3F) {     // Timer 3 (RESPIN 32)
+        timer3_.write(addr, val);
+        return;
+    }
+    if (rev3_ && addr >= 0x40 && addr <= 0x45) {     // the WS2812B driver (RESPIN 33)
+        ws_.write(addr, val);
+        return;
+    }
     switch (addr) {
     // GPIO
     case PeriphReg::PORT_B_OUT:      port_b_out_ = val; break;
@@ -241,8 +260,15 @@ void LisaPeripherals::tick_timer(TimerState& t, uint8_t int_bit) {
 }
 
 void LisaPeripherals::tick() {
-    if (rev3_)
+    if (cap_wave_ && ++cap_cnt_ >= cap_wave_) {
+        cap_cnt_ = 0;
+        port_a_in_ ^= 0x30;
+    }
+    if (rev3_) {
         spi_.tick();
+        timer3_.tick(port_a_in_);
+        ws_.tick();
+    }
     tick_timer(timer1_, IntSrc::TIMER1);
     tick_timer(timer2_, IntSrc::TIMER2);
 
@@ -275,6 +301,12 @@ uint8_t LisaPeripherals::uart_requests() const {
     return r;
 }
 
-uint8_t LisaPeripherals::get_interrupts() const {
-    return (int_status_ | uart_requests() | spi_request()) & int_enable_;
+uint16_t LisaPeripherals::get_interrupts() const {
+    uint8_t st = int_status_;
+    if (rev3_ && ws_.ie())                           // the WS2812B's free half takes the TTLC's source
+        st = (uint8_t)((st & ~IntSrc::TTLC) | (ws_.irq() ? IntSrc::TTLC : 0));
+    uint16_t r = (st | uart_requests() | spi_request()) & int_enable_;
+    if (rev3_ && timer3_.irq())
+        r |= IntSrc::TIMER3;
+    return r;
 }

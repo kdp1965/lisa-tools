@@ -103,7 +103,7 @@ public:
     // Interrupt request (bits correspond to int sources 0-7)
     void set_interrupt(uint8_t mask);
     void clear_interrupt(uint8_t mask);
-    void set_int_enable(uint8_t mask) { int_en_ = mask; }
+    void set_int_enable(uint16_t mask) { int_en_ = mask; }
     void set_fixed_irq(bool on) { fixed_irq_ = on; }
     // --rev2: the second chip (ttsky26d-um-lisa-ttlc, RESPIN.md): the
     // stack pointer at the byte on top of the stack (push decrements first,
@@ -189,7 +189,7 @@ private:
 
     // Interrupts
     uint8_t  int_pending_;
-    uint8_t  int_en_;
+    uint16_t int_en_;             // bit 8: Timer 3 (vector 9)
 
     // Connected modules
     LisaMemory*       mem_;
