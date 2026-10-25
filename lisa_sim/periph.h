@@ -7,6 +7,7 @@
 #include "spi.h"
 #include "timer3.h"
 #include "ws2812.h"
+#include "misc36.h"
 
 class LisaUart;
 
@@ -118,6 +119,10 @@ public:
 
     // Advance one clock cycle (for timers, etc.)
     void tick();
+    // RESPIN 36: the watchdog fired (once per firing) ...
+    bool take_wdt_reset() { return rev3_ && misc_.take_wdt_reset(); }
+    // ... and the peripherals' part of its reset: all but the watchdog
+    void reset_for_watchdog();
 
     // Get pending interrupt mask (for core to poll); bit 8 Timer 3 (gated by its own IE)
     uint16_t get_interrupts() const;
@@ -187,6 +192,8 @@ private:
     LisaTimer3 timer3_;
     // the WS2812B driver (the third chip, RESPIN 33)
     LisaWs2812 ws_;
+    // the cycle counter, the watchdog, the PDM outputs (the third chip, RESPIN 36)
+    LisaMisc36 misc_;
     // the TTLC I/O window's writable bytes (RESPIN 30/31: TIDX 0x2C, TDATA
     // 0x2D): the output flops 0-5 and the storage 12-15 / 20-23, kept for
     // the WS2812B DMA's BASE / LEN (RESPIN 35); the inputs read 0

@@ -19,7 +19,7 @@ endif
 # the source-level debugging reads sdcc's .cdb files through ../lisa_cdb,
 # shared with lisa_ide
 SRCS = main.cxx core.cxx memory.cxx periph.cxx uart.cxx bf16.cxx div.cxx \
-       disasm.cxx simulator.cxx cli.cxx serial.cxx icache.cxx spi.cxx timer3.cxx ws2812.cxx ../lisa_cdb/cdb.cxx
+       disasm.cxx simulator.cxx cli.cxx serial.cxx icache.cxx spi.cxx timer3.cxx ws2812.cxx misc36.cxx ../lisa_cdb/cdb.cxx
 OBJS = $(SRCS:.cxx=.o)
 TARGET = lisa_sim
 

@@ -59,6 +59,15 @@ int LisaSimulator::step() {
     for (int i = 0; i < cycles; i++) {
         periph_.tick();
     }
+    // RESPIN 36: the watchdog fired - the core and the peripherals reset
+    // (not the watchdog, the memories or the UART bridges)
+    if (periph_.take_wdt_reset()) {
+        core_.reset();
+        bf16_.reset();
+        div_.reset();
+        periph_.reset_for_watchdog();
+        connect_modules();
+    }
     // Propagate peripheral interrupts to core
     core_.set_int_enable(periph_.get_interrupts());
     // Poll host serial ports for incoming data, and let queued bytes land
