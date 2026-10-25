@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstdio>
 #include "periph.h"
 #include "uart.h"
 
@@ -253,6 +255,11 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
         i2c_cmd_ = val;
         // Simplified: complete I2C transaction immediately
         i2c_status_ |= 0x01;  // Set IRQ flag (command complete)
+        // LISA_I2C_TRACE=1: each byte on the bus to stderr - S / P the start
+        // and stop, W the byte written, R a read (no device: it reads 0)
+        if (getenv("LISA_I2C_TRACE") && (val & 0x30))
+            fprintf(stderr, "i2c %s%c %02x%s\n", (val & 0x80) ? "S " : "", (val & 0x20) ? 'R' : 'W',
+                    (val & 0x20) ? 0 : i2c_tx_data_, (val & 0x40) ? " P" : "");
         break;
 
     default:
