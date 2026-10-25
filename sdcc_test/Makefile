@@ -80,7 +80,7 @@ REV2CACHE += test_irqcache
 # Probes print the raw C flag after add/adc/sub/cmp (silicon vs. the ISA doc);
 # they are built but not checked.
 # the third chip: the second chip's tests less its data banks and KB, plus its own
-REV3TESTS = test_cachermw8 test_bank test_huge test_ldirq test_uartirq test_divc test_rev3c test_spiflash test_timer3 test_ws2812
+REV3TESTS = test_cachermw8 test_bank test_huge test_ldirq test_uartirq test_divc test_rev3c test_spiflash test_timer3 test_ws2812 test_wsdma
 TESTS     = $(SELFCHECK) $(KNOWN) $(OUTPUT) $(if $(REV3),$(REV3TESTS),$(if $(REV2),$(REV2CACHE),$(PROBES) $(CACHE)))
 
 all: $(TESTS:%=%$(SFX).ihx)

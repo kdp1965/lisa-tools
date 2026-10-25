@@ -36,6 +36,8 @@ void LisaPeripherals::reset() {
     spi_.reset();
     timer3_.reset();
     ws_.reset();
+    for (auto& b : tio_) b = 0;
+    tidx_ = 0;
 }
 
 uint8_t LisaPeripherals::read(uint8_t addr) {
@@ -43,6 +45,12 @@ uint8_t LisaPeripherals::read(uint8_t addr) {
         return timer3_.read(addr);
     if (rev3_ && addr >= 0x40 && addr <= 0x45)       // the WS2812B driver (RESPIN 33)
         return ws_.read(addr);
+    if (rev3_ && addr == 0x2C) return tidx_;         // the TTLC I/O window (RESPIN 30)
+    if (rev3_ && addr == 0x2D) {
+        uint8_t v = tio_[tidx_];
+        tidx_ = tidx_ == 23 ? 0 : (uint8_t)(tidx_ + 1);
+        return v;
+    }
     switch (addr) {
     // GPIO
     case PeriphReg::PORT_A_IN:       return port_a_in_;
@@ -134,7 +142,16 @@ void LisaPeripherals::write(uint8_t addr, uint8_t val) {
         return;
     }
     if (rev3_ && addr >= 0x40 && addr <= 0x45) {     // the WS2812B driver (RESPIN 33)
+        if (addr == 0x41)                            // DMA: BASE / LEN from the output flops
+            ws_.frame(tio_[0] | tio_[1] << 8, (tio_[2] | tio_[3] << 8) & 0x1FFF);
         ws_.write(addr, val);
+        return;
+    }
+    if (rev3_ && addr == 0x2C) { tidx_ = val < 24 ? val : (uint8_t)(val % 24); return; }
+    if (rev3_ && addr == 0x2D) {
+        bool w = tidx_ < 6 || (tidx_ >= 12 && tidx_ < 16) || tidx_ >= 20;
+        if (w) tio_[tidx_] = val;
+        tidx_ = tidx_ == 23 ? 0 : (uint8_t)(tidx_ + 1);
         return;
     }
     switch (addr) {

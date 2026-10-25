@@ -9,6 +9,10 @@
 // UNDERRUN.  The pixels themselves (the TTLC's output flops) and the pins
 // are not modelled: lisa_sim has no TTLC.  With IE the free-half request
 // replaces the TTLC's interrupt source (bit 5, vector 6).
+// DMA (RESPIN 35, WS_CTRL [5]): START (WS_STAT bit 6) sends LEN pixels
+// back to back (the flush and the fetch take no time here), then the reset
+// time: FRAME (bit 7, sticky) set, ACTIVE (bit 6) dropped or, with REPEAT
+// ([6]), the next frame; the request is IE and FRAME.
 #include <cstdint>
 
 class LisaWs2812 {
@@ -18,7 +22,8 @@ public:
     void    write(uint8_t addr, uint8_t val);
     void    tick();
     bool    ie() const { return (ctrl_ & 0x11) == 0x11; }
-    bool    irq() const { return ie() && full_ != 3; }
+    bool    irq() const { return ie() && (dma() ? frame_f_ : full_ != 3); }
+    void    frame(uint16_t base, uint16_t len) { base_ = base; len_ = len; }
 
 private:
     uint8_t  ctrl_ = 0, t0h_ = 20, t1h_ = 40, tbit_ = 62, trst_ = 219;
@@ -26,6 +31,10 @@ private:
     bool     next_ = false, busy_ = false, done_ = true, underrun_ = false;
     uint32_t left_ = 0;     // clocks of the pixel being sent
     uint32_t low_ = 0;      // clocks low since the last pixel
+    // DMA
+    bool     dma() const { return ctrl_ & 0x20; }
+    bool     active_ = false, frame_f_ = false;
+    uint16_t base_ = 0, len_ = 0, count_ = 0;
 };
 
 #endif

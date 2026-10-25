@@ -187,6 +187,11 @@ private:
     LisaTimer3 timer3_;
     // the WS2812B driver (the third chip, RESPIN 33)
     LisaWs2812 ws_;
+    // the TTLC I/O window's writable bytes (RESPIN 30/31: TIDX 0x2C, TDATA
+    // 0x2D): the output flops 0-5 and the storage 12-15 / 20-23, kept for
+    // the WS2812B DMA's BASE / LEN (RESPIN 35); the inputs read 0
+    uint8_t  tio_[24] = {};
+    uint8_t  tidx_ = 0;
     uint8_t  spi_request() const { return rev3_ && spi_.irq() ? IntSrc::SPI : 0; }
 
     void tick_timer(TimerState& t, uint8_t int_bit);
