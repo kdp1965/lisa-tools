@@ -13,7 +13,7 @@ public:
     uint8_t read(uint8_t addr);
     void    write(uint8_t addr, uint8_t val);
     void    tick(uint8_t port_a);       // one clock; the capture inputs from port A
-    bool    irq() const { return (status_ & ie_) != 0; }
+    bool    irq() const { return (status_ & ie_ & 0x1F) != 0; }
 
 private:
     uint8_t  pre_ = 0, pcnt_ = 0;

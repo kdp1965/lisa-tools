@@ -38,7 +38,7 @@ void LisaTimer3::write(uint8_t addr, uint8_t val) {
     case 0x37: cmp_[1] = (cmp_[1] & 0xFF00) | val; break;
     case 0x38: cmp_[1] = (cmp_[1] & 0x00FF) | (val << 8); break;
     case 0x3D: ctrl_ = val; break;
-    case 0x3E: ie_ = val & 0x1F; break;
+    case 0x3E: ie_ = val & 0x7F; break;     // [6:5] PDM0 / PDM1 (RESPIN 36: the outputs not modelled)
     case 0x3F: status_ &= ~(val & 0x1F); break;     // a 1 clears
     default: break;
     }
