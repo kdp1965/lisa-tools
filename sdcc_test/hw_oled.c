@@ -16,6 +16,9 @@
 #define WR    0x10
 #define TIP   0x02
 #define RXACK 0x80
+#ifndef PRESCALE
+#define PRESCALE 24                     /* 400 kHz at 50 MHz; 99 = 100 kHz, 999 = 10 kHz */
+#endif
 #ifndef FRAMES
 #define FRAMES 120                      /* the moving bar's (-DFRAMES=2 for the testbench) */
 #endif
@@ -124,8 +127,8 @@ void main(void)
   puts("oled\n");
   T3_PRE = 63; T3_TOP_L = 0xff; T3_TOP_H = 0xff; T3_CTRL = T3_CTRL_EN;
   I2C_CTRL = 0;
-  I2C_PRESCALE_LO = 24;
-  I2C_PRESCALE_HI = 0;
+  I2C_PRESCALE_LO = PRESCALE & 0xff;
+  I2C_PRESCALE_HI = PRESCALE >> 8;
   I2C_CTRL = 1;
 
   a3c = probe(0x3C);
