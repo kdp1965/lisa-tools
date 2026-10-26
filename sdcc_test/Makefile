@@ -45,7 +45,7 @@ CFLAGS  += --rev3 --stack-loc 0x1fffff
 REV2SIM  = --rev3
 endif
 
-SELFCHECK = test_core test_ptrdiff test_offsetof test_cmparray test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
+SELFCHECK = test_core test_ptrdiff test_offsetof test_structval test_cmparray test_negate test_union test_varargs test_digits test_signed test_strs test_regress test_pfu test_loop test_bigframe test_irq test_irq2 test_divsh test_divl test_bf16 test_bf16f test_ptroff test_rot test_index test_vshift
 # long long arithmetic through the library: built, not checked - its signed
 # modulo (_modslonglong, check 8) is wrong on lisa_sim, to be fixed
 KNOWN     = test_ll
@@ -94,6 +94,10 @@ DEPS = harness.h $(wildcard $(SDCC)) $(wildcard $(dir $(SDCC))../device/lib/buil
 
 # simulator only: a frame bigger than the chip's RAM, stack at the top of 32K
 test_bigframe$(SFX).ihx: test_bigframe.c $(DEPS)
+	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
+# structs and unions by value: frames of 20-odd bytes, several deep - past
+# the 128-byte RAM of the TT07 build, so the 32K one as test_bigframe
+test_structval$(SFX).ihx: test_structval.c $(DEPS)
 	$(SDCC) $(CFLAGS) --stack-loc 0x7fff -o $@ $<
 
 # the 64-bit library's frames outgrow the 128-byte RAM: stack at the top of
