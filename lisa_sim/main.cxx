@@ -34,6 +34,8 @@ static void usage(const char* prog) {
     printf("                   default %d, on a jump; N may be 0). The counts go to stderr after a run\n", InstCache::FILL_OVERHEAD + InstCache::FILL_PER_WORD);
     printf("                   --icache=0xD[,P],window: the respin's streaming window (inst_stream.v) of D\n");
     printf("                   words, %d ahead, the rest kept behind for loops (the chip: 0x8,window)\n", InstCache::WINDOW_AHEAD);
+    printf("                   LISA_ICACHE_WORD=<clocks>: the clocks per streamed word (10; RESPIN 37's DDR\n");
+    printf("                   fetch 4 with a restart of 61, its seamless SDR 8 with 65)\n");
     printf("  --cap-wave N     a square wave on port A bits 4-5 (Timer 3's captures), toggling every N clocks\n");
     printf("  --icache-pin=FILE      window mode: word ranges (\"first last\", hex) in a locked on-chip store\n");
     printf("  --icache-profile=FILE  window mode: the restarts and their stall clocks per word, after the run\n");

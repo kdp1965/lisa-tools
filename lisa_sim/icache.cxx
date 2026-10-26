@@ -1,8 +1,11 @@
 #include "icache.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 void InstCache::configure(int lines, int words, int penalty, bool direct, bool stream, bool window) {
+    if (const char *w = getenv("LISA_ICACHE_WORD"))
+        FILL_PER_WORD = atoi(w);
     window_  = window;
     depth_   = std::max(words, WINDOW_AHEAD + 1);
     if (window) {

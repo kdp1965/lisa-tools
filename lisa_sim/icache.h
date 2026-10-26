@@ -56,7 +56,7 @@
 class InstCache {
 public:
     static constexpr int FILL_OVERHEAD = 57;    // core clocks per fill before the first word
-    static constexpr int FILL_PER_WORD = 10;    // ... and per 16-bit word
+    static inline int FILL_PER_WORD = 10;       // ... and per 16-bit word (LISA_ICACHE_WORD= overrides: a study)
     static constexpr int STREAM_FIFO   = 4;     // words the streaming engine runs ahead
     static constexpr int MAX_WORDS     = 32;    // per line
     static int default_penalty(int words) { return FILL_OVERHEAD + FILL_PER_WORD * words; }
